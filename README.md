@@ -27,12 +27,17 @@ python3 -m http.server 8000
 
 ## GitHub Pages で公開する
 
-1. GitHub に空のリポジトリを作成します（例: `nitromoto`）。
-2. このフォルダをそのリポジトリへ push します。
+1. GitHub で **nitromoto** という名前の空のリポジトリを作成します（README・ライセンスは付けないでください）。
+2. このフォルダから push します。リモート（SSH）は設定済みなので、次の1行だけで送れます。
 
    ```bash
-   git remote add origin https://github.com/<ユーザー名>/nitromoto.git
    git push -u origin main
+   ```
+
+   別の名前にした場合や HTTPS を使う場合は、先に URL を変更してください。
+
+   ```bash
+   git remote set-url origin git@github.com:<ユーザー名>/<リポジトリ名>.git
    ```
 
 3. リポジトリの **Settings → Pages** を開き、**Build and deployment** を
