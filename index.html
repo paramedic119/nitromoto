@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1b2a4a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>NITRO MOTO</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div id="dist">0 m</div>
+    <div id="best">BEST 0 m</div>
+  </div>
+
+  <div id="nitro-bar"><div id="nitro-fill"></div></div>
+
+  <div id="hint">タップ＆ホールドでニトロ加速</div>
+
+  <div id="crash">
+    <div class="crash-card">
+      <div class="crash-title">CRASH!</div>
+      <div id="new-best" class="crash-newbest">★ NEW BEST! ★</div>
+      <div class="crash-row">距離 <span id="crash-dist">0 m</span></div>
+      <div class="crash-row">ベスト <span id="crash-best">0 m</span></div>
+      <div class="crash-tap">タップでリスタート</div>
+    </div>
+  </div>
+
+  <div id="rotate">📱 よこ向きでプレイしてね</div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

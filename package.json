@@ -1,0 +1,10 @@
+{
+  "name": "nitromoto",
+  "version": "1.0.0",
+  "description": "ニトロを溜めて放つ、スマホ向けモトクロス・エンドレスラン",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}
