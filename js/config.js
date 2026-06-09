@@ -36,6 +36,8 @@ export const config = {
   LAPS: 3,           // 周回数
   TIME_LIMIT: 150,   // フェイルセーフの制限時間(秒)
   RESPAWN_DELAY: 1.3,// クラッシュ後の復帰待ち(秒。レースは進み続ける)
+  RESPAWN_RUNUP: 380,// 復帰地点からギャップまで確保する助走距離(px)
+  RESPAWN_TURBO: 30, // 復帰時に最低限確保するターボ量
   COUNTDOWN: 2.6,    // スタート前のカウントダウン(秒)
   RIVAL_ACCEL: 765,  // ライバルの実効推進(cruise = RIVAL_ACCEL/DRAG)
 
