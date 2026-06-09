@@ -1,32 +1,24 @@
-// エントリポイント。固定タイムステップで物理を進め、描画とHUD更新を回す。
-// 入力(タップ/スペース)でターボ加速。ゴール/タイムアップ後の「離して押す」で再挑戦。
+// エントリポイント。固定タイムステップで物理を進め、描画とHUDを更新する。
 import { config } from './config.js';
-import { createGame, stepFixed, restart } from './game.js';
+import { createGame, stepFixed, restart, playerPlace } from './game.js';
 import { createRenderer } from './renderer.js';
 import { createInput } from './input.js';
 import { speedKmh, fmtTime } from './score.js';
 
 const canvas = document.getElementById('game');
 const renderer = createRenderer(canvas);
-const input = createInput(canvas);
+const input = createInput();
 const game = createGame();
 
-const elTime = document.getElementById('time');
-const elBest = document.getElementById('best');
-const elLap = document.getElementById('lap');
-const elSpeed = document.getElementById('speed');
-const elTurbo = document.getElementById('turbo-fill');
-const elHint = document.getElementById('hint');
-const elResult = document.getElementById('result');
-const elResultTitle = document.getElementById('result-title');
-const elResultTime = document.getElementById('result-time');
-const elResultBest = document.getElementById('result-best-time');
-const elNewBest = document.getElementById('result-new');
+const el = (id) => document.getElementById(id);
+const elTime = el('time'), elBest = el('best'), elLap = el('lap');
+const elSpeed = el('speed'), elPos = el('pos'), elTurbo = el('turbo-fill');
+const elCount = el('countdown');
+const elResult = el('result'), elResultTitle = el('result-title'), elResultSub = el('result-sub');
+const elResultTime = el('result-time'), elResultBest = el('result-best-time'), elNewBest = el('result-new');
 
 window.addEventListener('resize', () => renderer.resize());
 
-let prevPressing = false;
-let hintShown = true;
 let last = performance.now();
 let acc = 0;
 const MAX_FRAME = 0.1;
@@ -36,56 +28,70 @@ function frame(now) {
   last = now;
   if (dt > MAX_FRAME) dt = MAX_FRAME;
 
-  // ゴール/タイムアップ後、指を離して再度押した立ち上がりで再挑戦
-  const finished = game.status === 'cleared' || game.status === 'timeup';
-  if (finished && input.pressing && !prevPressing) {
+  if (game.status === 'finished' && input.tap) {
     restart(game);
-    hintShown = true;
-    elHint.classList.remove('hide');
   }
+  input.tap = false; // 1フレームで消費
 
-  // ループ突破時などのスローモー演出
-  const scale = game.slowmo > 0 ? 0.4 : 1;
+  const scale = game.slowmo > 0 ? 0.45 : 1;
   acc += dt * scale;
   let steps = 0;
   while (acc >= config.DT && steps < 240) {
-    stepFixed(game, config.DT, input.pressing);
+    stepFixed(game, config.DT, input);
     acc -= config.DT;
     steps++;
   }
 
   renderer.render(game);
   updateHud();
-
-  if (hintShown && input.pressing) {
-    elHint.classList.add('hide');
-    hintShown = false;
-  }
-
-  prevPressing = input.pressing;
   requestAnimationFrame(frame);
 }
 
 function updateHud() {
-  const left = Math.max(0, config.TIME_LIMIT - game.time);
-  elTime.textContent = left.toFixed(1);
-  elTime.classList.toggle('danger', left <= 10);
+  elTime.textContent = game.time > 0 ? fmtTime(game.time) : '0.0';
   elBest.textContent = 'BEST ' + (game.best > 0 ? fmtTime(game.best) : '--.-');
   elLap.textContent = 'LAP ' + game.lap + '/' + game.laps;
   elSpeed.textContent = Math.round(speedKmh(game.bike)) + ' km/h';
+
+  const place = playerPlace(game);
+  elPos.textContent = place === 1 ? '1st' : '2nd';
+  elPos.classList.toggle('lead', place === 1);
 
   const pct = Math.max(0, Math.min(1, game.bike.turbo / config.TURBO_MAX));
   elTurbo.style.width = pct * 100 + '%';
   elTurbo.classList.toggle('empty', pct <= 0.05);
 
-  if (game.status === 'cleared' || game.status === 'timeup') {
+  // カウントダウン
+  if (game.status === 'countdown') {
+    const c = Math.ceil(game.countdown);
+    elCount.textContent = c <= 0 ? 'GO!' : String(c);
+    elCount.classList.add('show');
+  } else if (game.time < 0.6 && game.status === 'racing') {
+    elCount.textContent = 'GO!';
+    elCount.classList.add('show');
+  } else {
+    elCount.classList.remove('show');
+  }
+
+  // リザルト
+  if (game.status === 'finished') {
     elResult.classList.add('show');
-    const cleared = game.status === 'cleared';
-    elResultTitle.textContent = cleared ? 'GOAL!' : 'TIME UP';
-    elResultTitle.classList.toggle('timeup', !cleared);
-    elResultTime.textContent = cleared ? fmtTime(game.finishTime) : '--.-';
+    if (game.dnf) {
+      elResultTitle.textContent = 'TIME UP';
+      elResultTitle.className = 'result-title lose';
+      elResultSub.textContent = 'リタイア';
+    } else if (game.win) {
+      elResultTitle.textContent = 'WIN!';
+      elResultTitle.className = 'result-title win';
+      elResultSub.textContent = '1st / ライバルに勝利';
+    } else {
+      elResultTitle.textContent = 'LOSE';
+      elResultTitle.className = 'result-title lose';
+      elResultSub.textContent = '2nd / ライバルに先着された';
+    }
+    elResultTime.textContent = game.dnf ? '--.-' : fmtTime(game.finishTime);
     elResultBest.textContent = game.best > 0 ? fmtTime(game.best) : '--.-';
-    elNewBest.style.display = cleared && game.newBest ? 'block' : 'none';
+    elNewBest.style.display = !game.dnf && game.newBest ? 'block' : 'none';
   } else {
     elResult.classList.remove('show');
   }

@@ -1,7 +1,5 @@
-// 描画(Canvas 2D)。カメラがバイクを追従し右へスクロール。
-// 地形・ピット・ループ・スプリング・トンネル・ターボ・ゴール・ライバル・
-// バイク・パーティクル・演出を描く。
-import { config } from './config.js';
+// 描画(Canvas 2D)。カメラがプレイヤーを追従し右へスクロール。
+import { surfaceYAt, surfaceSlopeAt } from './track.js';
 
 const SKY_TOP = '#1b2a4a';
 const SKY_BOT = '#3e5c8a';
@@ -10,9 +8,7 @@ const GROUND_TOP = '#6b8f3a';
 
 export function createRenderer(canvas) {
   const ctx = canvas.getContext('2d');
-  let W = 0;
-  let H = 0;
-  let dpr = 1;
+  let W = 0, H = 0, dpr = 1;
 
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -29,7 +25,6 @@ export function createRenderer(canvas) {
     const { track, bike } = game;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // カメラ：バイクを画面左1/3に置く。縦は緩く追従。左端はコース手前で止める。
     let camX = Math.max(-W * 0.1, bike.x - W * 0.32);
     let camY = bike.y - H * 0.55;
     if (game.shake > 0) {
@@ -84,14 +79,9 @@ export function createRenderer(canvas) {
     ctx.beginPath();
     let started = false;
     for (let i = 0; i < p.length; i++) {
-      const sx = p[i].x - camX;
-      const sy = p[i].y - camY;
-      if (!started) {
-        ctx.moveTo(sx, sy);
-        started = true;
-      } else {
-        ctx.lineTo(sx, sy);
-      }
+      const sx = p[i].x - camX, sy = p[i].y - camY;
+      if (!started) { ctx.moveTo(sx, sy); started = true; }
+      else ctx.lineTo(sx, sy);
     }
     ctx.lineTo(W + 50, H + 50);
     ctx.lineTo(-50, H + 50);
@@ -101,14 +91,9 @@ export function createRenderer(canvas) {
     ctx.beginPath();
     started = false;
     for (let i = 0; i < p.length; i++) {
-      const sx = p[i].x - camX;
-      const sy = p[i].y - camY;
-      if (!started) {
-        ctx.moveTo(sx, sy);
-        started = true;
-      } else {
-        ctx.lineTo(sx, sy);
-      }
+      const sx = p[i].x - camX, sy = p[i].y - camY;
+      if (!started) { ctx.moveTo(sx, sy); started = true; }
+      else ctx.lineTo(sx, sy);
     }
     ctx.strokeStyle = GROUND_TOP;
     ctx.lineWidth = 4;
@@ -117,20 +102,15 @@ export function createRenderer(canvas) {
 
   function drawTunnels(track, camX, camY) {
     for (const t of track.tunnels) {
-      const sx0 = t.x0 - camX;
-      const sx1 = t.x1 - camX;
+      const sx0 = t.x0 - camX, sx1 = t.x1 - camX;
       if (sx1 < -20 || sx0 > W + 20) continue;
       const cy = t.ceilY - camY;
-      // 天井の梁
       ctx.fillStyle = '#2a2118';
       ctx.fillRect(sx0, cy - 26, sx1 - sx0, 26);
       ctx.strokeStyle = GROUND_TOP;
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo(sx0, cy);
-      ctx.lineTo(sx1, cy);
-      ctx.stroke();
-      // 端の柱
+      ctx.moveTo(sx0, cy); ctx.lineTo(sx1, cy); ctx.stroke();
       ctx.fillStyle = 'rgba(20,16,12,0.6)';
       ctx.fillRect(sx0 - 4, cy - 26, 6, 26);
       ctx.fillRect(sx1 - 2, cy - 26, 6, 26);
@@ -159,7 +139,6 @@ export function createRenderer(canvas) {
       const sx = s.x - camX;
       if (sx < -20 || sx > W + 20) continue;
       const sy = s.y - camY;
-      // バネ台（赤白の小ランプ）
       ctx.fillStyle = '#ff5a5a';
       ctx.beginPath();
       ctx.moveTo(sx - 14, sy);
@@ -187,9 +166,7 @@ export function createRenderer(canvas) {
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(sx, gy);
-      ctx.lineTo(sx, gy - 50);
-      ctx.stroke();
+      ctx.moveTo(sx, gy); ctx.lineTo(sx, gy - 50); ctx.stroke();
       ctx.fillStyle = '#5ad1ff';
       ctx.beginPath();
       ctx.moveTo(sx, gy - 50);
@@ -201,29 +178,21 @@ export function createRenderer(canvas) {
   }
 
   function drawFinish(track, camX, camY) {
-    const wx = track.finishX;
-    const sx = wx - camX;
+    const sx = track.finishX - camX;
     if (sx < -40 || sx > W + 40) return;
-    const gy = groundScreenY(track, wx, camY);
+    const gy = groundScreenY(track, track.finishX, camY);
     const top = gy - 120;
-    // ポール
     ctx.fillStyle = '#ddd';
     ctx.fillRect(sx - 2, top, 4, 120);
-    // チェッカー旗
-    const cols = 5;
-    const rows = 3;
-    const cw = 12;
-    const ch = 10;
-    for (let r = 0; r < rows; r++) {
+    const cols = 5, rows = 3, cw = 12, ch = 10;
+    for (let r = 0; r < rows; r++)
       for (let c = 0; c < cols; c++) {
         ctx.fillStyle = (r + c) % 2 === 0 ? '#111' : '#fff';
         ctx.fillRect(sx + 2 + c * cw, top + r * ch, cw, ch);
       }
-    }
-    // 路面のチェッカーライン
     for (let r = 0; r < 6; r++) {
       ctx.fillStyle = r % 2 === 0 ? '#111' : '#fff';
-      ctx.fillRect(sx - 6, gy - 6 + r * 2 - 6, 12, 2);
+      ctx.fillRect(sx - 6, gy - 12 + r * 2, 12, 2);
     }
   }
 
@@ -246,7 +215,6 @@ export function createRenderer(canvas) {
       ctx.strokeStyle = '#eaffff';
       ctx.lineWidth = 2;
       ctx.stroke();
-      // ターボ記号「T」
       ctx.fillStyle = '#0a2230';
       ctx.font = 'bold 11px sans-serif';
       ctx.textAlign = 'center';
@@ -259,34 +227,37 @@ export function createRenderer(canvas) {
 
   function drawRival(game, camX, camY) {
     const track = game.track;
-    if (game.rivalX <= 0 || game.rivalX >= track.finishX) return;
-    const sx = game.rivalX - camX;
-    if (sx < -30 || sx > W + 30) return;
-    const gy = groundScreenY(track, game.rivalX, camY);
+    const r = game.rival;
+    if (r.finished) return;
+    const sx = r.x - camX;
+    if (sx < -40 || sx > W + 40) return;
+    const sy = surfaceYAt(track, r.x) - camY;
+    const ang = surfaceSlopeAt(track, r.x);
     ctx.save();
-    ctx.globalAlpha = 0.55;
-    ctx.translate(sx, gy - 12);
-    ctx.fillStyle = '#9aa6c2';
-    ctx.fillRect(-13, -8, 26, 8);
-    rivalWheel(-9, 4);
-    rivalWheel(9, 4);
+    ctx.translate(sx, sy - 12);
+    ctx.rotate(ang);
+    ctx.fillStyle = '#3a6ad6';
+    ctx.fillRect(-14, -8, 28, 8);
+    rivalWheel(-10, 4);
+    rivalWheel(10, 4);
     ctx.fillStyle = '#cdd6ec';
-    ctx.fillRect(-4, -15, 8, 8);
+    ctx.fillRect(-4, -16, 8, 8);
     ctx.restore();
-    ctx.globalAlpha = 0.8;
-    ctx.fillStyle = '#cdd6ec';
+    ctx.fillStyle = '#bcd0ff';
     ctx.font = 'bold 10px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('RIVAL', sx, gy - 30);
+    ctx.fillText('RIVAL', sx, sy - 34);
     ctx.textAlign = 'left';
-    ctx.globalAlpha = 1;
   }
 
   function rivalWheel(x, y) {
     ctx.beginPath();
-    ctx.arc(x, y, 5, 0, Math.PI * 2);
-    ctx.fillStyle = '#33384a';
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#15203a';
     ctx.fill();
+    ctx.strokeStyle = '#7f8fb8';
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 
   function drawLandingMarker(game, camX, camY) {
@@ -297,9 +268,7 @@ export function createRenderer(canvas) {
     ctx.lineWidth = 2;
     ctx.setLineDash([6, 6]);
     ctx.beginPath();
-    ctx.moveTo(sx, gy - 80);
-    ctx.lineTo(sx, gy);
-    ctx.stroke();
+    ctx.moveTo(sx, gy - 80); ctx.lineTo(sx, gy); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = 'rgba(255,255,255,0.9)';
     ctx.beginPath();
@@ -307,23 +276,13 @@ export function createRenderer(canvas) {
     ctx.fill();
   }
 
-  // これから来る難所を画面端アイコンで予告
   function drawHazardPreview(game, camX) {
-    const aheadFrom = camX + W;
-    const aheadTo = aheadFrom + 700;
+    const from = camX + W, to = from + 700;
     let icon = null;
-    for (const lp of game.track.loops) {
-      if (lp.enterX > aheadFrom && lp.enterX < aheadTo) icon = '◯';
-    }
-    for (const g of game.track.gaps) {
-      if (g[0] > aheadFrom && g[0] < aheadTo) icon = '⤴';
-    }
-    for (const s of game.track.springs) {
-      if (s.x > aheadFrom && s.x < aheadTo) icon = '↑';
-    }
-    for (const t of game.track.tunnels) {
-      if (t.x0 > aheadFrom && t.x0 < aheadTo) icon = '▭';
-    }
+    for (const lp of game.track.loops) if (lp.enterX > from && lp.enterX < to) icon = '◯';
+    for (const g of game.track.gaps) if (g[0] > from && g[0] < to) icon = '⤴';
+    for (const s of game.track.springs) if (s.x > from && s.x < to) icon = '↑';
+    for (const t of game.track.tunnels) if (t.x0 > from && t.x0 < to) icon = '▭';
     if (!icon) return;
     ctx.fillStyle = 'rgba(255,210,90,0.9)';
     ctx.font = 'bold 30px sans-serif';
@@ -343,9 +302,7 @@ export function createRenderer(canvas) {
 
   function drawBike(game, camX, camY) {
     const bike = game.bike;
-    let px = bike.x - camX;
-    let py = bike.y - camY;
-    let angle = bike.angle;
+    let px = bike.x - camX, py = bike.y - camY, angle = bike.angle;
 
     if (bike.inLoop && game.loopAnim) {
       const lp = game.loopAnim.lp;
@@ -391,8 +348,7 @@ export function createRenderer(canvas) {
   function groundScreenY(track, worldX, camY) {
     const p = track.points;
     if (p.length < 2) return H * 0.6;
-    let lo = 0;
-    let hi = p.length - 1;
+    let lo = 0, hi = p.length - 1;
     if (worldX <= p[0].x) return p[0].y - camY;
     if (worldX >= p[hi].x) return p[hi].y - camY;
     while (lo < hi) {
@@ -400,8 +356,7 @@ export function createRenderer(canvas) {
       if (p[mid].x <= worldX) lo = mid;
       else hi = mid - 1;
     }
-    const a = p[lo];
-    const b = p[lo + 1] || a;
+    const a = p[lo], b = p[lo + 1] || a;
     const t = b.x === a.x ? 0 : (worldX - a.x) / (b.x - a.x);
     return a.y + (b.y - a.y) * t - camY;
   }

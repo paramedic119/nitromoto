@@ -1,193 +1,117 @@
-/* 全画面キャンバス + HUDオーバーレイ。縦持ちは回転を促す。 */
+/* 全画面キャンバス + HUD/操作オーバーレイ。縦持ちは回転を促す。 */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
-  width: 100%;
-  height: 100%;
+  width: 100%; height: 100%;
   overflow: hidden;
   background: #1b2a4a;
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN",
     "Noto Sans JP", "Yu Gothic", sans-serif;
-  -webkit-user-select: none;
-  user-select: none;
+  -webkit-user-select: none; user-select: none;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
 }
 
-#game {
-  display: block;
-  width: 100vw;
-  height: 100vh;
-  touch-action: none;
-}
+#game { display: block; width: 100vw; height: 100vh; touch-action: none; }
 
-/* --- HUD左上: 残り時間とベストタイム --- */
+/* --- HUD左上: タイムとベスト --- */
 #hud-left {
-  position: fixed;
-  top: 0;
-  left: 0;
+  position: fixed; top: 0; left: 0;
   padding: max(env(safe-area-inset-top), 12px) 0 0 max(env(safe-area-inset-left), 16px);
-  pointer-events: none;
-  color: #fff;
+  pointer-events: none; color: #fff;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
 }
-#time {
-  font-size: 38px;
-  font-weight: 800;
-  line-height: 1;
-  letter-spacing: 0.5px;
-  font-variant-numeric: tabular-nums;
-}
-#time.danger {
-  color: #ff5a5a;
-  animation: pulse 0.6s ease-in-out infinite;
-}
-@keyframes pulse {
-  50% { opacity: 0.4; }
-}
-#best {
-  margin-top: 6px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #ffd24a;
-}
+#time { font-size: 38px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+#best { margin-top: 6px; font-size: 14px; font-weight: 700; color: #ffd24a; }
 
-/* --- HUD右上: ラップと速度 --- */
+/* --- HUD右上: ラップ・順位・速度 --- */
 #hud-right {
-  position: fixed;
-  top: 0;
-  right: 0;
+  position: fixed; top: 0; right: 0;
   padding: max(env(safe-area-inset-top), 12px) max(env(safe-area-inset-right), 16px) 0 0;
-  pointer-events: none;
-  text-align: right;
-  color: #fff;
+  pointer-events: none; text-align: right; color: #fff;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
 }
-#lap {
-  font-size: 22px;
-  font-weight: 800;
-  color: #5ad1ff;
-}
-#speed {
-  margin-top: 4px;
-  font-size: 14px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.9;
-}
+#lap { font-size: 22px; font-weight: 800; color: #5ad1ff; }
+#pos { margin-top: 2px; font-size: 20px; font-weight: 900; color: #ff8a8a; }
+#pos.lead { color: #7CFFb0; }
+#speed { margin-top: 4px; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; opacity: 0.9; }
 
-/* --- ターボゲージ(下中央) --- */
+/* --- ターボゲージ(上中央) --- */
 #turbo-bar {
-  position: fixed;
-  left: 50%;
-  bottom: max(env(safe-area-inset-bottom), 18px);
+  position: fixed; left: 50%; top: max(env(safe-area-inset-top), 14px);
   transform: translateX(-50%);
-  width: min(60vw, 360px);
-  height: 16px;
+  width: min(46vw, 280px); height: 14px;
   background: rgba(0, 0, 0, 0.35);
   border: 2px solid rgba(255, 255, 255, 0.5);
-  border-radius: 9px;
-  overflow: hidden;
-  pointer-events: none;
+  border-radius: 8px; overflow: hidden; pointer-events: none;
 }
 #turbo-fill {
-  height: 100%;
-  width: 55%;
+  height: 100%; width: 45%;
   background: linear-gradient(90deg, #5ad1ff, #7ce8ff);
   box-shadow: 0 0 12px rgba(124, 232, 255, 0.8);
   transition: width 0.08s linear;
 }
-#turbo-fill.empty {
-  background: #4a5366;
-  box-shadow: none;
-}
+#turbo-fill.empty { background: #4a5366; box-shadow: none; }
 
-/* --- 操作ヒント(初回タップで消える) --- */
-#hint {
-  position: fixed;
-  left: 50%;
-  top: 62%;
-  transform: translateX(-50%);
-  padding: 10px 20px;
-  background: rgba(0, 0, 0, 0.45);
-  border-radius: 22px;
-  color: #fff;
-  font-size: 16px;
-  font-weight: 600;
-  white-space: nowrap;
+/* --- 画面操作ボタン --- */
+#pad-left, #pad-right {
+  position: fixed; bottom: max(env(safe-area-inset-bottom), 16px);
+  display: flex; gap: 14px; align-items: flex-end; z-index: 20;
+}
+#pad-left { left: max(env(safe-area-inset-left), 16px); }
+#pad-right { right: max(env(safe-area-inset-right), 16px); }
+.pad-btn {
+  width: 72px; height: 72px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  background: rgba(20, 30, 55, 0.5);
+  color: #fff; font-size: 20px; font-weight: 900;
+  touch-action: none; -webkit-user-select: none; user-select: none;
+}
+.pad-btn:active { background: rgba(90, 209, 255, 0.5); }
+.pad-btn.accel { width: 84px; height: 84px; background: rgba(226, 58, 58, 0.45); border-color: #ff8a8a; }
+.pad-btn.turbo { background: rgba(124, 232, 255, 0.3); border-color: #7ce8ff; }
+
+/* --- カウントダウン / GO --- */
+#countdown {
+  position: fixed; inset: 0; display: none;
+  align-items: center; justify-content: center;
+  font-size: 120px; font-weight: 900; color: #fff;
+  text-shadow: 0 6px 24px rgba(0, 0, 0, 0.8);
   pointer-events: none;
-  transition: opacity 0.4s ease;
 }
-#hint.hide { opacity: 0; }
+#countdown.show { display: flex; }
 
-/* --- リザルト画面(ゴール / タイムアップ) --- */
+/* --- リザルト画面 --- */
 #result {
-  position: fixed;
-  inset: 0;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: rgba(10, 15, 30, 0.6);
-  pointer-events: none;
+  position: fixed; inset: 0; display: none;
+  align-items: center; justify-content: center;
+  background: rgba(10, 15, 30, 0.6); pointer-events: none;
 }
 #result.show { display: flex; }
 .result-card {
   padding: 26px 44px;
   background: rgba(20, 30, 55, 0.94);
-  border: 2px solid #ffd24a;
-  border-radius: 18px;
-  text-align: center;
-  color: #fff;
+  border: 2px solid #ffd24a; border-radius: 18px;
+  text-align: center; color: #fff;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
-.result-title {
-  font-size: 42px;
-  font-weight: 900;
-  letter-spacing: 3px;
-  color: #5ad1ff;
-}
-.result-title.timeup { color: #ff6b6b; }
-.result-newbest {
-  display: none;
-  margin: 8px 0;
-  font-size: 20px;
-  font-weight: 800;
-  color: #ffd24a;
-}
-.result-row {
-  margin: 8px 0;
-  font-size: 18px;
-}
-.result-row span {
-  font-weight: 800;
-  color: #ffd24a;
-  font-variant-numeric: tabular-nums;
-}
-.result-tap {
-  margin-top: 18px;
-  font-size: 14px;
-  opacity: 0.85;
-  animation: blink 1.2s ease-in-out infinite;
-}
-@keyframes blink {
-  50% { opacity: 0.25; }
-}
+.result-title { font-size: 46px; font-weight: 900; letter-spacing: 3px; }
+.result-title.win { color: #7CFFb0; }
+.result-title.lose { color: #ff6b6b; }
+.result-sub { margin-top: 2px; font-size: 15px; opacity: 0.9; }
+.result-newbest { display: none; margin: 8px 0; font-size: 20px; font-weight: 800; color: #ffd24a; }
+.result-row { margin: 8px 0; font-size: 18px; }
+.result-row span { font-weight: 800; color: #ffd24a; font-variant-numeric: tabular-nums; }
+.result-tap { margin-top: 18px; font-size: 14px; opacity: 0.85; animation: blink 1.2s ease-in-out infinite; }
+@keyframes blink { 50% { opacity: 0.25; } }
 
 /* --- 縦持ちは回転を促す --- */
 #rotate { display: none; }
 @media (orientation: portrait) {
   #rotate {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #1b2a4a;
-    color: #fff;
-    font-size: 22px;
-    font-weight: 700;
-    text-align: center;
-    padding: 0 24px;
+    position: fixed; inset: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: center;
+    background: #1b2a4a; color: #fff; font-size: 22px; font-weight: 700;
+    text-align: center; padding: 0 24px;
   }
 }
