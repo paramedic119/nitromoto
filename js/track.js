@@ -1,11 +1,12 @@
-// コース自動生成（契約ベース）。各生成関数は接続点で高さと傾きを連続させる。
-// 物理側は points(折れ線) と gaps/loops/nitros を参照して動く。
+// 周回コースの生成。固定シードで「1周ぶん」の地形（ループ・ジャンプ・
+// スプリング・トンネル）を作り、ラップ数ぶんタイル接続してゴールを置く。
+// 物理側は points(折れ線) と gaps/loops/springs/tunnels/turbos を参照して動く。
 import { config } from './config.js';
 
 const STEP = 20;     // 地形ラインの x 刻み(px)
 const BASE_Y = 500;  // 基準の地面高さ(y下正：大きいほど画面下)
 
-// 決定的擬似乱数。seed 固定で同じコースを再現できる(テスト・デバッグ用)。
+// 決定的擬似乱数。seed 固定で同じコースを再現できる。
 export function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
@@ -68,142 +69,221 @@ export function loopAt(track, x) {
   return null;
 }
 
-// 平坦/起伏/上り/下りを生成。傾きを余弦補間で滑らかに変化させ C1 連続を保つ。
-function genSmooth(track, startX, startY, startSlope, type, len, rng) {
+// x のトンネル天井の高さ(world y)。トンネル外は null。
+export function tunnelCeilingAt(track, x) {
+  for (const t of track.tunnels) {
+    if (x >= t.x0 && x <= t.x1) return t.ceilY;
+  }
+  return null;
+}
+
+// 区間 [a, b] を横切るスプリングを返す(まだ未使用のもの)。
+export function springBetween(track, a, b) {
+  for (const s of track.springs) {
+    if (!s._done && s.x > a && s.x <= b) return s;
+  }
+  return null;
+}
+
+// ---- 1周ぶんの地形生成 ----------------------------------------------------
+// 各 gen* は t(生成中のコース)の end{X,Y,Slope} を更新しつつ points を伸ばす。
+
+// 平坦/起伏/上り/下り。傾きを余弦補間で滑らかに変化させ C1 連続を保つ。
+function genSmooth(t, type, len, rng) {
   let targetSlope;
-  if (type === 'up') targetSlope = -(0.22 + rng() * 0.22);     // 上り(y下正で負)
-  else if (type === 'down') targetSlope = 0.22 + rng() * 0.22; // 下り(正)
+  if (type === 'up') targetSlope = -(0.20 + rng() * 0.18);     // 上り(y下正で負)
+  else if (type === 'down') targetSlope = 0.20 + rng() * 0.18; // 下り(正)
   else targetSlope = 0;                                        // flat / hill のベース
   const steps = Math.max(1, Math.round(len / STEP));
-  let x = startX;
-  let y = startY;
-  let slope = startSlope;
+  const s0 = t.endSlope;
+  let x = t.endX;
+  let y = t.endY;
+  let slope = s0;
   for (let i = 1; i <= steps; i++) {
     const u = i / steps;
-    let s = startSlope + (targetSlope - startSlope) * (0.5 - 0.5 * Math.cos(u * Math.PI));
-    if (type === 'hill') s += Math.sin(u * Math.PI * 2) * 0.18; // 起伏の波
+    let s = s0 + (targetSlope - s0) * (0.5 - 0.5 * Math.cos(u * Math.PI));
+    if (type === 'hill') s += Math.sin(u * Math.PI * 2) * 0.16; // 起伏の波
     slope = s;
     y += Math.tan(slope) * STEP;
     x += STEP;
-    track.points.push({ x, y });
+    t.points.push({ x, y });
   }
-  return { endX: x, endY: y, endSlope: slope };
+  t.endX = x;
+  t.endY = y;
+  t.endSlope = slope;
+}
+
+// 現在地から targetY へ滑らかに戻し、末端を平坦(slope=0)にする。
+// 周回をシームレスにつなぐため、各ラップは必ず BASE_Y / 水平で終える。
+function genRampTo(t, targetY, len) {
+  const steps = Math.max(1, Math.round(len / STEP));
+  const y0 = t.endY;
+  let x = t.endX;
+  let y = y0;
+  for (let i = 1; i <= steps; i++) {
+    const u = i / steps;
+    y = y0 + (targetY - y0) * (0.5 - 0.5 * Math.cos(u * Math.PI));
+    x += STEP;
+    t.points.push({ x, y });
+  }
+  t.endX = x;
+  t.endY = targetY;
+  t.endSlope = 0;
 }
 
 // ジャンプ台(キッカー)＋ギャップ(ピット)＋着地リム。離陸→放物落下→着地。
-function genGap(track, startX, startY, startSlope, rng) {
-  let x = startX;
-  let y = startY;
-  let slope = startSlope;
+function genGap(t, rng) {
+  const s0 = t.endSlope;
+  let x = t.endX;
+  let y = t.endY;
+  let slope = s0;
   const kickerSlope = -(0.4 + rng() * 0.2); // 上向き(負=上り)
   const kickSteps = 6;
   for (let i = 1; i <= kickSteps; i++) {
     const u = i / kickSteps;
-    slope = startSlope + (kickerSlope - startSlope) * (0.5 - 0.5 * Math.cos(u * Math.PI));
+    slope = s0 + (kickerSlope - s0) * (0.5 - 0.5 * Math.cos(u * Math.PI));
     y += Math.tan(slope) * STEP;
     x += STEP;
-    track.points.push({ x, y });
+    t.points.push({ x, y });
   }
   const liftX = x;
   const liftY = y;
-  const gapW = 120 + rng() * 160;
+  const gapW = 130 + rng() * 150;
   const landX = liftX + gapW;
-  const landY = liftY + (20 + rng() * 80); // 着地リムは少し低い
-  const pitY = liftY + 320;                // ピット底(crashの目印。深さは演出)
-  track.gaps.push([liftX, landX]);
-  // ピット形状(左壁→底→右壁)。ギャップ内の地形に触れたら game 側でクラッシュ。
-  track.points.push({ x: liftX + 2, y: pitY });
-  track.points.push({ x: landX - 2, y: pitY });
-  track.points.push({ x: landX, y: landY });
-  // 着地後の平坦な助走路
+  const landY = liftY + (10 + rng() * 60); // 着地リムは少し低い
+  const pitY = liftY + 320;                // ピット底(crashの目印)
+  t.gaps.push([liftX, landX]);
+  t.points.push({ x: liftX + 2, y: pitY });
+  t.points.push({ x: landX - 2, y: pitY });
+  t.points.push({ x: landX, y: landY });
   x = landX;
   y = landY;
   for (let i = 1; i <= 4; i++) {
     x += STEP;
-    track.points.push({ x, y });
+    t.points.push({ x, y });
   }
-  return { endX: x, endY: y, endSlope: 0 };
+  t.endX = x;
+  t.endY = y;
+  t.endSlope = 0;
 }
 
 // 360度ループ。地形は平坦のまま。進入速度判定＋回転演出は game/renderer 側。
-function genLoop(track, startX, startY, startSlope, rng) {
-  let x = startX;
-  let y = startY;
-  let slope = startSlope;
-  const runSteps = 8;
-  for (let i = 1; i <= runSteps; i++) {
-    const u = i / runSteps;
-    slope = startSlope + (0 - startSlope) * (0.5 - 0.5 * Math.cos(u * Math.PI));
-    y += Math.tan(slope) * STEP;
-    x += STEP;
-    track.points.push({ x, y });
-  }
-  const baseY = y;
+function genLoop(t, rng) {
+  // 助走で水平に整える
+  genSmooth(t, 'flat', 120, rng);
+  const baseY = t.endY;
   const r = 55 + rng() * 25;
   const width = r * 2.4;
-  const enterX = x;
+  const enterX = t.endX;
   const cx = enterX + width * 0.5;
   const exitX = enterX + width;
-  track.loops.push({ enterX, exitX, r, cx, cy: baseY - r, baseY });
-  // ループ下の地面は平坦
+  t.loops.push({ enterX, exitX, r, cx, cy: baseY - r, baseY, _entered: false });
+  let x = enterX;
   while (x + STEP < exitX) {
     x += STEP;
-    track.points.push({ x, y: baseY });
+    t.points.push({ x, y: baseY });
   }
-  track.points.push({ x: exitX, y: baseY });
-  return { endX: exitX, endY: baseY, endSlope: 0 };
+  t.points.push({ x: exitX, y: baseY });
+  t.endX = exitX;
+  t.endY = baseY;
+  t.endSlope = 0;
 }
 
-const TYPES = ['flat', 'hill', 'up', 'down', 'gap', 'loop'];
+// スプリング(ジャンプ台)。平坦な助走に1基設置。踏むと真上へ大ジャンプ。
+function genSpring(t, rng) {
+  genSmooth(t, 'flat', 120, rng);
+  t.springs.push({ x: t.endX, y: t.endY, _done: false });
+  genSmooth(t, 'flat', 160, rng);
+}
 
-// 進行距離で難所の重みを上げる。難易度カーブはこの1関数に集約。
-function pickType(rng, worldX) {
-  const hard = Math.min(worldX / 20000, 1);
-  const w = {
-    flat: Math.max(0.5, 3 - hard * 1.5),
-    hill: 2 + hard,
-    up: 1 + hard,
-    down: 1 + hard,
-    gap: worldX < 2500 ? 0 : 0.3 + hard * 1.2,
-    loop: 0, // ループは extendTo のスケジュールで配置するためランダムでは出さない
+// トンネル。平坦区間の上に低い天井。飛び上がって頭をぶつけるとクラッシュ。
+function genTunnel(t, rng) {
+  genSmooth(t, 'flat', 100, rng); // 水平な導入
+  const x0 = t.endX;
+  const ground = t.endY;
+  const len = 240 + rng() * 220;
+  genSmooth(t, 'flat', len, rng);
+  const x1 = t.endX;
+  t.tunnels.push({ x0, x1, ceilY: ground - config.TUNNEL_GAP });
+  genSmooth(t, 'flat', 80, rng);
+}
+
+// 1周ぶんの地形を組み立てる。本家風に難所を順序立てて配置（運ゲーにしない）。
+function buildLapTemplate(seed) {
+  const rng = mulberry32(seed);
+  const t = {
+    points: [{ x: 0, y: BASE_Y }],
+    gaps: [],
+    loops: [],
+    springs: [],
+    tunnels: [],
+    endX: 0,
+    endY: BASE_Y,
+    endSlope: 0,
   };
-  let total = 0;
-  for (const t of TYPES) total += w[t];
-  let pick = rng() * total;
-  for (const t of TYPES) {
-    pick -= w[t];
-    if (pick <= 0) return t;
+  // スタートストレート
+  genSmooth(t, 'flat', 520, rng);
+  // 難所シーケンス（ループ前は必ず下り/平坦で速度を乗せる）
+  const seq = [
+    'hill', 'down', 'loop', 'hill', 'gap', 'up',
+    'spring', 'down', 'tunnel', 'hill', 'down', 'loop',
+    'gap', 'hill', 'spring', 'down',
+  ];
+  for (const type of seq) {
+    if (type === 'gap') genGap(t, rng);
+    else if (type === 'loop') genLoop(t, rng);
+    else if (type === 'spring') genSpring(t, rng);
+    else if (type === 'tunnel') genTunnel(t, rng);
+    else genSmooth(t, type, 220 + rng() * 240, rng);
   }
-  return 'flat';
+  // フィニッシュ前は必ず水平・基準高へ戻す（周回のシームレス接続のため）
+  genRampTo(t, BASE_Y, 360);
+  genSmooth(t, 'flat', 260, rng);
+  t.lapLen = t.endX;
+  return t;
 }
 
-// 区間 [fromX,toX) にニトロカプセルを散布。セグメント境界をまたいで一定間隔で置く。
-// track.nextNitroX を前進カーソルにして、短い区間でも取りこぼさず均等配置する。
-function scatterNitros(track, fromX, toX) {
+// テンプレを offset ぶん右へずらして本コースへ流し込む。
+function appendLap(track, tmpl, off, includeFirstPoint) {
+  const pts = tmpl.points;
+  for (let i = includeFirstPoint ? 0 : 1; i < pts.length; i++) {
+    track.points.push({ x: pts[i].x + off, y: pts[i].y });
+  }
+  for (const g of tmpl.gaps) track.gaps.push([g[0] + off, g[1] + off]);
+  for (const lp of tmpl.loops) {
+    track.loops.push({
+      enterX: lp.enterX + off, exitX: lp.exitX + off, r: lp.r,
+      cx: lp.cx + off, cy: lp.cy, baseY: lp.baseY, _entered: false,
+    });
+  }
+  for (const s of tmpl.springs) track.springs.push({ x: s.x + off, y: s.y, _done: false });
+  for (const tn of tmpl.tunnels) track.tunnels.push({ x0: tn.x0 + off, x1: tn.x1 + off, ceilY: tn.ceilY });
+}
+
+// ターボパネルを区間に均等散布（ギャップ/ループ/トンネル上は避ける）。
+function scatterTurbos(track) {
   const rng = track.rng;
-  while (track.nextNitroX < toX) {
-    const x = track.nextNitroX;
-    if (x >= fromX && !isGap(track, x) && !loopAt(track, x)) {
-      track.nitros.push({
+  let x = 360;
+  while (x < track.finishX) {
+    if (!isGap(track, x) && !loopAt(track, x) && tunnelCeilingAt(track, x) == null) {
+      track.turbos.push({
         x,
         y: heightAt(track, x) - (16 + rng() * 20),
         taken: false,
         guaranteed: false,
       });
     }
-    track.nextNitroX += 220 + rng() * 200; // 次の間隔 220-420px
+    x += 220 + rng() * 180;
   }
 }
 
-// 難所(ループ)手前にクリアに足りるニトロを必ず置く(運ゲー防止)。
-function guaranteeNitrosBeforeHazards(track) {
+// 各ループ手前にクリアへ足りるターボを必ず置く(運ゲー防止)。
+function guaranteeTurbosBeforeLoops(track) {
   for (const lp of track.loops) {
-    if (lp._guaranteed) continue;
-    lp._guaranteed = true;
-    for (let i = 0; i < 4; i++) {
-      const nx = lp.enterX - 1800 + i * 300;
-      if (nx <= 0) continue;
-      track.nitros.push({
+    for (let i = 0; i < 3; i++) {
+      const nx = lp.enterX - 1500 + i * 360;
+      if (nx <= 80) continue;
+      track.turbos.push({
         x: nx,
         y: heightAt(track, nx) - 40,
         taken: false,
@@ -213,64 +293,38 @@ function guaranteeNitrosBeforeHazards(track) {
   }
 }
 
-// 新しいコースを作る。最初は必ず平坦な助走路から始める(操作に慣れる)。
-export function createTrack(seed = 1) {
+// 固定シードの周回コースを作る。laps 周ぶんタイル接続し、末尾にゴール。
+export function createCourse(seed = config.SEED, laps = config.LAPS) {
+  const tmpl = buildLapTemplate(seed);
   const track = {
-    points: [{ x: 0, y: BASE_Y }],
+    seed,
+    laps,
+    lapLen: tmpl.lapLen,
+    points: [], // 最初のラップ(includeFirstPoint)で x=0 から積む
     gaps: [],
     loops: [],
-    nitros: [],
-    nextNitroX: 350, // ニトロ散布の前進カーソル(助走路の終盤から置き始める)
-    nextLoopX: 2200, // 次にループを必ず置く位置(売りの機能を運任せにしない)
-    rng: mulberry32(seed),
-    endX: 0,
-    endY: BASE_Y,
-    endSlope: 0,
+    springs: [],
+    tunnels: [],
+    turbos: [],
+    lapBoundaries: [],
+    rng: mulberry32(seed ^ 0x9e3779b9),
   };
-  const r = genSmooth(track, 0, BASE_Y, 0, 'flat', 600, track.rng);
-  track.endX = r.endX;
-  track.endY = r.endY;
-  track.endSlope = r.endSlope;
+  for (let k = 0; k < laps; k++) {
+    appendLap(track, tmpl, k * tmpl.lapLen, k === 0);
+    track.lapBoundaries.push((k + 1) * tmpl.lapLen);
+  }
+  track.finishX = laps * tmpl.lapLen;
+  // ゴール後の流走路（減速して停止できるように）
+  let x = track.finishX;
+  for (let i = 1; i <= 40; i++) {
+    x += STEP;
+    track.points.push({ x, y: BASE_Y });
+  }
+  track.endX = x;
+  scatterTurbos(track);
+  guaranteeTurbosBeforeLoops(track);
   return track;
 }
 
-// worldX まで右方向へセグメントを生成し続ける。
-export function extendTo(track, worldX) {
-  let guard = 0;
-  while (track.endX < worldX && guard++ < 100000) {
-    const prevEndX = track.endX;
-    let type;
-    if (track.endX >= track.nextLoopX) {
-      type = 'loop'; // スケジュールでループを必ず出す
-      track.nextLoopX = track.endX + 2400 + track.rng() * 1600; // 次まで 2400-4000px
-    } else {
-      type = pickType(track.rng, track.endX);
-    }
-    let res;
-    if (type === 'gap') {
-      res = genGap(track, track.endX, track.endY, track.endSlope, track.rng);
-    } else if (type === 'loop') {
-      res = genLoop(track, track.endX, track.endY, track.endSlope, track.rng);
-    } else {
-      const len = 200 + track.rng() * 300;
-      res = genSmooth(track, track.endX, track.endY, track.endSlope, type, len, track.rng);
-    }
-    track.endX = res.endX;
-    track.endY = res.endY;
-    track.endSlope = res.endSlope;
-    scatterNitros(track, prevEndX, track.endX);
-    guaranteeNitrosBeforeHazards(track);
-  }
-}
-
-// 画面より十分後方の点・アイテムを捨ててメモリを節約。
-export function dropBehind(track, worldX) {
-  const keepFrom = worldX - 2000;
-  if (keepFrom <= 0) return;
-  let drop = 0;
-  while (drop < track.points.length - 2 && track.points[drop + 1].x < keepFrom) drop++;
-  if (drop > 0) track.points.splice(0, drop);
-  track.nitros = track.nitros.filter((n) => n.x >= keepFrom);
-  track.gaps = track.gaps.filter((g) => g[1] >= keepFrom);
-  track.loops = track.loops.filter((lp) => lp.exitX >= keepFrom);
-}
+// 後方互換のためのエイリアス（旧名 createTrack を残す）。
+export const createTrack = createCourse;

@@ -1,52 +1,58 @@
-// ゲーム状態管理。GROUNDED⇄AIRBORNE 状態遷移、ループ判定ゲート、ニトロ取得、
-// クラッシュ／リスタート、簡易エフェクト(砂埃・シェイク・スロー)をまとめる。
+// ゲーム状態管理。タイムアタックのレース進行（時間・ラップ・ゴール判定）、
+// GROUNDED⇄AIRBORNE 状態遷移、ループ/スプリング/トンネル、ターボ取得、
+// クラッシュ→時間ロス付きリスポーン、簡易エフェクトをまとめる。
 import { config } from './config.js';
 import {
   createBike,
   stepGrounded,
   launch,
+  launchSpring,
   landingTangentSpeed,
   canClearLoop,
 } from './physics.js';
 import {
-  createTrack,
-  extendTo,
-  dropBehind,
+  createCourse,
   heightAt,
   slopeAt,
   isGap,
   loopAt,
+  tunnelCeilingAt,
+  springBetween,
 } from './track.js';
-import { distanceMeters, shouldCrash, isBest } from './score.js';
+import { distanceMeters, isBestTime } from './score.js';
 import { loadBest, saveBest } from './storage.js';
 
-const AHEAD = 2000;       // バイク前方どこまで生成しておくか(px)
-const NITRO_R = 28;       // ニトロ取得判定の半径(px)
+const TURBO_R = 28;       // ターボ取得判定の半径(px)
 const FALL_LIMIT = 1300;  // 地面からこれ以上落ちたらクラッシュ(px)
 const LOOP_DUR = 0.7;     // ループ回転演出の長さ(秒)
 const LAND_ANGLE_MAX = 0.95; // 着地時の進行方向と地形傾きの許容差(rad)
 
 function freshRun(seed) {
-  const track = createTrack(seed);
-  extendTo(track, AHEAD);
+  const track = createCourse(seed, config.LAPS);
   const bike = createBike();
   bike.x = 0;
   bike.y = heightAt(track, 0);
+  bike.safeX = 0;
   return { track, bike };
 }
 
-export function createGame(seed = (Math.random() * 1e9) | 0) {
+export function createGame(seed = config.SEED) {
   const { track, bike } = freshRun(seed);
   return {
     seed,
     track,
     bike,
-    status: 'playing', // 'playing' | 'crashed'
-    dist: 0,
+    status: 'playing', // 'playing' | 'crashed' | 'cleared' | 'timeup'
     time: 0,
+    dist: 0,
+    lap: 1,
+    laps: config.LAPS,
     best: loadBest(),
     newBest: false,
+    finishTime: null,
+    rivalX: 0,
     failLoop: false,
+    respawn: 0,
     shake: 0,
     flash: 0,
     slowmo: 0,
@@ -57,38 +63,50 @@ export function createGame(seed = (Math.random() * 1e9) | 0) {
 }
 
 export function restart(game) {
-  const seed = (Math.random() * 1e9) | 0;
-  const { track, bike } = freshRun(seed);
-  game.seed = seed;
+  const { track, bike } = freshRun(game.seed); // 同シード＝同コースで再挑戦
   game.track = track;
   game.bike = bike;
   game.status = 'playing';
-  game.dist = 0;
   game.time = 0;
+  game.dist = 0;
+  game.lap = 1;
   game.newBest = false;
+  game.finishTime = null;
+  game.rivalX = 0;
   game.failLoop = false;
+  game.respawn = 0;
   game.shake = 0;
   game.flash = 0;
   game.slowmo = 0;
   game.loopAnim = null;
   game.particles = [];
   game.landingX = null;
-  // best は前回値を保持(マーカーと比較に使う)
+  // best は前回値を保持
 }
 
 // 物理1ステップ(固定dt)。main.js のアキュムレータから複数回呼ばれる。
 export function stepFixed(game, dt, pressing) {
-  if (game.status !== 'playing') return;
+  if (game.status === 'cleared' || game.status === 'timeup') return;
+
   const { track, bike } = game;
   game.time += dt;
-
-  extendTo(track, bike.x + AHEAD);
-  dropBehind(track, bike.x);
 
   if (game.shake > 0) game.shake = Math.max(0, game.shake - dt * 40);
   if (game.flash > 0) game.flash = Math.max(0, game.flash - dt * 3);
   if (game.slowmo > 0) game.slowmo = Math.max(0, game.slowmo - dt);
   updateParticles(game, dt);
+
+  // ライバル(ペース走行のゴースト)
+  const rivalSpeed = track.finishX / (config.TIME_LIMIT * config.PAR_RATIO);
+  game.rivalX = Math.min(track.finishX, rivalSpeed * game.time);
+
+  // クラッシュ中：時計は止まらず、待ち時間後にリスポーン
+  if (game.status === 'crashed') {
+    game.respawn -= dt;
+    if (game.respawn <= 0) respawnBike(game);
+    if (game.status === 'playing' || game.status === 'crashed') checkTimeUp(game);
+    return;
+  }
 
   if (game.loopAnim) {
     stepLoopAnim(game, dt, pressing);
@@ -98,23 +116,44 @@ export function stepFixed(game, dt, pressing) {
     stepGround(game, dt, pressing);
   }
 
-  collectNitros(game);
+  collectTurbos(game);
   game.dist = distanceMeters(bike);
-  if (!game.newBest && isBest(game.dist, game.best)) game.newBest = true;
+  game.lap = Math.min(game.laps, Math.floor(bike.x / track.lapLen) + 1);
+
+  if (bike.x >= track.finishX) {
+    clearRace(game);
+    return;
+  }
+  checkTimeUp(game);
+}
+
+function checkTimeUp(game) {
+  if (game.status !== 'playing' && game.status !== 'crashed') return;
+  if (game.time >= config.TIME_LIMIT) {
+    game.time = config.TIME_LIMIT;
+    game.status = 'timeup';
+    game.shake = 10;
+    game.bike.firing = false;
+  }
 }
 
 function stepGround(game, dt, pressing) {
   const { track, bike } = game;
   const slope = slopeAt(track, bike.x);
-  stepGrounded(bike, { slope, nitro: pressing });
+  stepGrounded(bike, { slope, turbo: pressing });
+  bike.safeX = bike.x; // 接地中の現在地は安全（リスポーン地点）
 
-  if (shouldCrash(bike, false)) {
-    crash(game);
+  const nextX = bike.x + bike.v * Math.cos(slope) * dt;
+
+  // スプリングを踏んだら真上へ大ジャンプ
+  const sp = springBetween(track, bike.x, nextX);
+  if (sp) {
+    sp._done = true;
+    launchSpring(bike, slope);
+    spawnDust(game, sp.x, bike.y, 10, '#ffd24a');
+    game.shake = 4;
     return;
   }
-
-  // v は接線方向の速さ。水平成分で x を進める。
-  const nextX = bike.x + bike.v * Math.cos(slope) * dt;
 
   // ギャップに踏み込むなら離陸(キッカーの上向き接線で跳ぶ)
   if (isGap(track, nextX)) {
@@ -136,12 +175,10 @@ function stepGround(game, dt, pressing) {
 function enterLoop(game, lp) {
   const { bike } = game;
   if (canClearLoop(bike.v, lp.r)) {
-    // 成功: 回転演出。位置はループ曲線(renderer)、物理は平坦床を進む。
     game.loopAnim = { lp, t: 0, dur: LOOP_DUR };
     game.slowmo = 0.3;
     game.flash = 1;
   } else {
-    // 失敗: 頂点付近で離脱→落下→着地時にクラッシュ確定
     bike.airborne = true;
     launch(bike, -1.1);
     game.failLoop = true;
@@ -154,9 +191,9 @@ function stepLoopAnim(game, dt, pressing) {
   const a = game.loopAnim;
   const lp = a.lp;
   a.t += dt;
-  if (pressing && bike.nitro > 0) {
-    bike.v += config.NITRO_THRUST * 0.5 * dt;
-    bike.nitro = Math.max(0, bike.nitro - config.NITRO_BURN * dt);
+  if (pressing && bike.turbo > 0) {
+    bike.v += config.TURBO_THRUST * 0.5 * dt;
+    bike.turbo = Math.max(0, bike.turbo - config.TURBO_BURN * dt);
     bike.firing = true;
   } else {
     bike.firing = false;
@@ -174,6 +211,7 @@ function stepLoopAnim(game, dt, pressing) {
     bike.x = lp.exitX;
     bike.y = heightAt(track, bike.x);
     bike.angle = slopeAt(track, bike.x);
+    bike.safeX = bike.x;
     spawnDust(game, bike.x, bike.y, 12);
     game.shake = 6;
   }
@@ -188,6 +226,13 @@ function stepAir(game, dt) {
     bike.x += bike.vx * h;
     bike.y += bike.vy * h;
     bike.s += Math.hypot(bike.vx, bike.vy) * h;
+
+    // トンネルの天井で頭を打つとクラッシュ
+    const ceil = tunnelCeilingAt(track, bike.x);
+    if (ceil != null && bike.y < ceil) {
+      crash(game);
+      return;
+    }
     const groundY = heightAt(track, bike.x);
     if (bike.y >= groundY) {
       land(game, groundY);
@@ -204,7 +249,6 @@ function stepAir(game, dt) {
 
 function land(game, groundY) {
   const { track, bike } = game;
-  // ギャップ内の地形(ピット壁/底)に触れた、またはループ失敗 → クラッシュ
   if (isGap(track, bike.x) || game.failLoop) {
     crash(game);
     return;
@@ -217,8 +261,9 @@ function land(game, groundY) {
   }
   bike.y = groundY;
   bike.airborne = false;
-  bike.v = Math.max(config.V_MIN, landingTangentSpeed(bike.vx, bike.vy, slope));
+  bike.v = Math.max(config.V_START * 0.5, landingTangentSpeed(bike.vx, bike.vy, slope));
   bike.angle = slope;
+  bike.safeX = bike.x;
   game.landingX = null;
   spawnDust(game, bike.x, bike.y, 10);
   game.shake = 4;
@@ -242,13 +287,13 @@ function predictLanding(game) {
   return null;
 }
 
-function collectNitros(game) {
+function collectTurbos(game) {
   const { track, bike } = game;
-  for (const n of track.nitros) {
+  for (const n of track.turbos) {
     if (n.taken) continue;
-    if (Math.abs(n.x - bike.x) < NITRO_R && Math.abs(n.y - bike.y) < NITRO_R + 16) {
+    if (Math.abs(n.x - bike.x) < TURBO_R && Math.abs(n.y - bike.y) < TURBO_R + 16) {
       n.taken = true;
-      bike.nitro = Math.min(config.NITRO_MAX, bike.nitro + config.NITRO_PICKUP);
+      bike.turbo = Math.min(config.TURBO_MAX, bike.turbo + config.TURBO_PICKUP);
       spawnDust(game, n.x, n.y, 6, '#7cf');
     }
   }
@@ -257,15 +302,47 @@ function collectNitros(game) {
 function crash(game) {
   const { bike } = game;
   game.status = 'crashed';
+  game.respawn = config.RESPAWN_DELAY;
   bike.firing = false;
+  bike.airborne = false;
+  game.loopAnim = null;
+  bike.inLoop = false;
   game.shake = 14;
   game.landingX = null;
   spawnDust(game, bike.x, bike.y, 26, '#f66');
+}
+
+// 時間ロス後、直前の安全地点へ復帰してレース続行。
+function respawnBike(game) {
+  const { track, bike } = game;
+  let rx = Math.max(0, bike.safeX - 60);
+  while (rx > 0 && isGap(track, rx)) rx -= 20;
+  bike.x = rx;
+  bike.y = heightAt(track, rx);
+  bike.angle = slopeAt(track, rx);
+  bike.v = config.V_START;
+  bike.vx = 0;
+  bike.vy = 0;
+  bike.airborne = false;
+  bike.firing = false;
+  game.failLoop = false;
+  game.landingX = null;
+  game.status = 'playing';
+}
+
+function clearRace(game) {
+  const { bike, track } = game;
+  bike.x = track.finishX;
   game.dist = distanceMeters(bike);
-  if (isBest(game.dist, game.best)) {
+  game.status = 'cleared';
+  game.finishTime = game.time;
+  game.flash = 1;
+  game.shake = 4;
+  bike.firing = false;
+  if (isBestTime(game.time, game.best)) {
     game.newBest = true;
-    saveBest(game.dist);
-    game.best = game.dist;
+    saveBest(game.time);
+    game.best = game.time;
   }
 }
 

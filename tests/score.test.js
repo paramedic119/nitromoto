@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { distanceMeters, shouldCrash, isBest } from '../js/score.js';
+import { distanceMeters, isBestTime, fmtTime, speedKmh } from '../js/score.js';
 import { loadBest, saveBest } from '../js/storage.js';
 import { config } from '../js/config.js';
 
@@ -8,22 +8,28 @@ test('distanceMeters は s/PX_PER_M(メートル換算)', () => {
   assert.equal(distanceMeters({ s: config.PX_PER_M * 10 }), 10);
 });
 
-test('shouldCrash: 地上で失速(v_min割れ)', () => {
-  assert.equal(shouldCrash({ airborne: false, v: config.V_MIN - 1 }, false), true);
+test('speedKmh は v を時速へ換算', () => {
+  const v = config.PX_PER_M; // 1 m/s
+  assert.ok(Math.abs(speedKmh({ v }) - 3.6) < 1e-9);
 });
 
-test('shouldCrash: 画面下へ落下', () => {
-  assert.equal(shouldCrash({ airborne: true, v: 100 }, true), true);
+test('isBestTime: 記録なし(0)は常にベスト', () => {
+  assert.equal(isBestTime(45.2, 0), true);
 });
 
-test('shouldCrash: 正常走行はクラッシュしない', () => {
-  assert.equal(shouldCrash({ airborne: false, v: config.V_MIN + 1 }, false), false);
+test('isBestTime: より速いタイムがベスト', () => {
+  assert.equal(isBestTime(40, 50), true);
+  assert.equal(isBestTime(60, 50), false);
+  assert.equal(isBestTime(50, 50), false);
 });
 
-test('isBest は記録更新を判定', () => {
-  assert.equal(isBest(100, 50), true);
-  assert.equal(isBest(50, 100), false);
-  assert.equal(isBest(50, 50), false);
+test('fmtTime: 60秒未満は秒.小数', () => {
+  assert.equal(fmtTime(0), '--.-');
+  assert.equal(fmtTime(12.34), '12.3');
+});
+
+test('fmtTime: 60秒以上は m:ss.s', () => {
+  assert.equal(fmtTime(75.6), '1:15.6');
 });
 
 function stubLocalStorage() {
@@ -36,10 +42,10 @@ function stubLocalStorage() {
   };
 }
 
-test('storage: 保存した値を読み戻せる', () => {
+test('storage: 保存したタイムを読み戻せる', () => {
   stubLocalStorage();
-  saveBest(123.4);
-  assert.equal(loadBest(), 123.4);
+  saveBest(45.6);
+  assert.equal(loadBest(), 45.6);
 });
 
 test('storage: 未保存なら 0 を返す', () => {
