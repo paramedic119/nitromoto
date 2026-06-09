@@ -21,8 +21,8 @@ html, body {
   touch-action: none;
 }
 
-/* --- HUD(左上: 距離とベスト) --- */
-#hud {
+/* --- HUD左上: 残り時間とベストタイム --- */
+#hud-left {
   position: fixed;
   top: 0;
   left: 0;
@@ -31,11 +31,19 @@ html, body {
   color: #fff;
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
 }
-#dist {
-  font-size: 34px;
+#time {
+  font-size: 38px;
   font-weight: 800;
   line-height: 1;
   letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+}
+#time.danger {
+  color: #ff5a5a;
+  animation: pulse 0.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% { opacity: 0.4; }
 }
 #best {
   margin-top: 6px;
@@ -44,8 +52,32 @@ html, body {
   color: #ffd24a;
 }
 
-/* --- ニトロゲージ(下中央) --- */
-#nitro-bar {
+/* --- HUD右上: ラップと速度 --- */
+#hud-right {
+  position: fixed;
+  top: 0;
+  right: 0;
+  padding: max(env(safe-area-inset-top), 12px) max(env(safe-area-inset-right), 16px) 0 0;
+  pointer-events: none;
+  text-align: right;
+  color: #fff;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+#lap {
+  font-size: 22px;
+  font-weight: 800;
+  color: #5ad1ff;
+}
+#speed {
+  margin-top: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+/* --- ターボゲージ(下中央) --- */
+#turbo-bar {
   position: fixed;
   left: 50%;
   bottom: max(env(safe-area-inset-bottom), 18px);
@@ -58,14 +90,14 @@ html, body {
   overflow: hidden;
   pointer-events: none;
 }
-#nitro-fill {
+#turbo-fill {
   height: 100%;
-  width: 60%;
+  width: 55%;
   background: linear-gradient(90deg, #5ad1ff, #7ce8ff);
   box-shadow: 0 0 12px rgba(124, 232, 255, 0.8);
   transition: width 0.08s linear;
 }
-#nitro-fill.empty {
+#turbo-fill.empty {
   background: #4a5366;
   box-shadow: none;
 }
@@ -88,8 +120,8 @@ html, body {
 }
 #hint.hide { opacity: 0; }
 
-/* --- クラッシュ画面 --- */
-#crash {
+/* --- リザルト画面(ゴール / タイムアップ) --- */
+#result {
   position: fixed;
   inset: 0;
   display: none;
@@ -98,8 +130,8 @@ html, body {
   background: rgba(10, 15, 30, 0.6);
   pointer-events: none;
 }
-#crash.show { display: flex; }
-.crash-card {
+#result.show { display: flex; }
+.result-card {
   padding: 26px 44px;
   background: rgba(20, 30, 55, 0.94);
   border: 2px solid #ffd24a;
@@ -108,28 +140,30 @@ html, body {
   color: #fff;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
-.crash-title {
+.result-title {
   font-size: 42px;
   font-weight: 900;
   letter-spacing: 3px;
-  color: #ff6b6b;
+  color: #5ad1ff;
 }
-.crash-newbest {
+.result-title.timeup { color: #ff6b6b; }
+.result-newbest {
   display: none;
   margin: 8px 0;
   font-size: 20px;
   font-weight: 800;
   color: #ffd24a;
 }
-.crash-row {
+.result-row {
   margin: 8px 0;
   font-size: 18px;
 }
-.crash-row span {
+.result-row span {
   font-weight: 800;
-  color: #5ad1ff;
+  color: #ffd24a;
+  font-variant-numeric: tabular-nums;
 }
-.crash-tap {
+.result-tap {
   margin-top: 18px;
   font-size: 14px;
   opacity: 0.85;
