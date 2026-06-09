@@ -60,6 +60,14 @@ export function isGap(track, x) {
   return false;
 }
 
+// x を含むギャップ [liftX, landX] を返す（無ければ null）
+export function gapContaining(track, x) {
+  for (const g of track.gaps) {
+    if (x >= g[0] && x < g[1]) return g;
+  }
+  return null;
+}
+
 export function loopAt(track, x) {
   for (const lp of track.loops) {
     if (x >= lp.enterX && x <= lp.exitX) return lp;

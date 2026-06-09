@@ -16,6 +16,7 @@ import {
   heightAt,
   slopeAt,
   isGap,
+  gapContaining,
   loopAt,
   tunnelCeilingAt,
   springBetween,
@@ -27,6 +28,7 @@ import { loadBest, saveBest } from './storage.js';
 const TURBO_R = 28;
 const FALL_LIMIT = 1300;
 const LOOP_DUR = 0.66;
+const PIT_DEPTH = 60; // ギャップ横断中、対岸リムよりこの深さ以上沈んだら「落下」判定(px)
 
 const NO_INPUT = { accel: false, turbo: false, up: false, down: false };
 
@@ -237,6 +239,17 @@ function stepAirborne(game, dt, input) {
       crash(game);
       return;
     }
+    // ギャップ上は開いた空中：ピット床やリムの壁は着地面にしない。
+    // 対岸リム(landX)を越えれば平坦な着地帯に着地、リムより深く沈めば落下。
+    const gp = gapContaining(track, bike.x);
+    if (gp) {
+      const rimY = heightAt(track, gp[1]);
+      if (bike.y - rimY > PIT_DEPTH) {
+        crash(game); // ギャップに落下
+        return;
+      }
+      continue; // まだ横断中。地形ジオメトリには着地しない
+    }
     const groundY = heightAt(track, bike.x);
     if (bike.y >= groundY) {
       land(game, groundY);
@@ -312,10 +325,31 @@ function crash(game) {
   spawnDust(game, bike.x, bike.y, 26, '#f66');
 }
 
+// クラッシュ地点の手前で、次のギャップまで助走できる安全な復帰地点を探す。
+// ギャップのキッカー直前に出してしまうと加速し切れず無限クラッシュになるため、
+// 前方 RESPAWN_RUNUP px 以内にギャップが無い地点まで戻す（必要なら過去のギャップも越える）。
+function gapWithin(track, x, dist) {
+  for (const g of track.gaps) {
+    if (g[0] > x && g[0] <= x + dist) return true;
+  }
+  return false;
+}
+
+function respawnSpot(track, safeX) {
+  let rx = Math.max(0, safeX - 60);
+  for (let guard = 0; rx > 0 && guard < 600; guard++) {
+    if (isGap(track, rx) || gapWithin(track, rx, config.RESPAWN_RUNUP)) {
+      rx -= 20;
+      continue;
+    }
+    break;
+  }
+  return Math.max(0, rx);
+}
+
 function respawnBike(game) {
   const { track, bike } = game;
-  let rx = Math.max(0, bike.safeX - 60);
-  while (rx > 0 && isGap(track, rx)) rx -= 20;
+  const rx = respawnSpot(track, bike.safeX);
   bike.x = rx;
   bike.y = heightAt(track, rx);
   bike.angle = slopeAt(track, rx);
@@ -323,6 +357,9 @@ function respawnBike(game) {
   bike.vx = 0; bike.vy = 0; bike.av = 0;
   bike.airborne = false;
   bike.firing = false;
+  // ターボ切れでギャップに嵌まり続けないよう、復帰時に最低限のゲージを確保
+  bike.turbo = Math.max(bike.turbo, config.RESPAWN_TURBO);
+  bike.safeX = rx;
   game.failLoop = false;
   game.landingX = null;
   game.status = 'racing';
