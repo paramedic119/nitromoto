@@ -1,41 +1,46 @@
 import { config } from './config.js';
 
-// === GROUNDED ⇄ AIRBORNE 状態遷移 ===
-// GROUNDED: 弧長 s で地形に追従。x,y は地形から算出。
-//   エンジンが常に前進させ、平地では巡航速度 ENGINE/DRAG に収束する。
-//   ターボ(ホールド中かつ残量あり)で更に加速。坂で加減速。
-// AIRBORNE: (x,y,vx,vy) で放物運動。重力で vy が増える(y下正)。
-//   着地時は速度ベクトルを地形接線へ射影してスカラー v に戻す。
+// バイクの物理。状態を持つのは createBike が返すオブジェクトで、
+// 各関数は純粋に近い形で状態を更新する（テストしやすさのため）。
+//
+// 角度 angle は地形傾きと同じ約束（atan2(dy,dx)、下り正）。
+// 地上では angle≒地形傾き。空中では ↑↓ リーンと自然トルク AIR_PITCH で
+// 回転し、着地時に地形傾きとの差が LAND_TOL を超えるとクラッシュ。
 
 export function createBike() {
   return {
-    s: 0, v: config.V_START, airborne: false,
-    x: 0, y: 0, vx: 0, vy: 0, angle: 0, turbo: config.TURBO_START,
+    s: 0,            // 走行弧長(px)。総距離・周回判定に使う
+    v: config.V_START, // 接線方向の速さ(px/s)
+    x: 0, y: 0,      // ワールド座標(y下正)
+    vx: 0, vy: 0,    // 空中の速度
+    angle: 0,        // 車体の傾き(rad)
+    av: 0,           // 角速度(rad/s, 空中回転)
+    airborne: false,
+    turbo: config.TURBO_START,
     inLoop: false, loopT: 0,
-    firing: false, safeX: 0,
+    firing: false,   // ターボ噴射中(描画用)
+    flips: 0,        // 空中で稼いだ回転量(演出/将来用)
+    safeX: 0,        // 直近の安全な接地x(リスポーン地点)
   };
 }
 
-// env = { slope, turbo }。slope は rad(下り正)、turbo はホールド中フラグ
-export function stepGrounded(bike, env) {
+// 地上の速度更新。env = { slope, accel, turbo }
+export function stepGroundSpeed(bike, env) {
   const dt = config.DT;
-  // 下り(slope>0)で加速・上り(slope<0)で減速。y下正のため符号は+
   const aGravity = config.GRAVITY * Math.sin(env.slope) * config.SLOPE_GAIN;
-  // ターボは「ホールド中 かつ 残量あり」のときだけ噴射し残量を消費
+  const aEngine = env.accel ? config.ACCEL : 0;
   const firing = env.turbo && bike.turbo > 0;
-  const aTurbo = firing ? config.TURBO_THRUST : 0;
+  const aTurbo = firing ? config.TURBO : 0;
   if (firing) {
     bike.turbo -= config.TURBO_BURN * dt;
     if (bike.turbo < 0) bike.turbo = 0;
   }
   bike.firing = firing;
-  // エンジンの定常推進と速度比例の抵抗。平地無ターボの平衡は ENGINE/DRAG。
-  const aEngine = config.ENGINE;
   const aDrag = -config.DRAG * bike.v;
   bike.v += (aGravity + aEngine + aTurbo + aDrag) * dt;
   if (bike.v < 0) bike.v = 0;
+  if (bike.v > config.V_MAX) bike.v = config.V_MAX;
   bike.s += bike.v * dt;
-  bike.angle = env.slope;
 }
 
 // スカラー速度 v を接線(slope)方向の (vx, vy) に分解して離陸
@@ -43,23 +48,42 @@ export function launch(bike, slope) {
   bike.airborne = true;
   bike.vx = bike.v * Math.cos(slope);
   bike.vy = bike.v * Math.sin(slope);
+  bike.angle = slope;
+  bike.av = 0;
+  bike.flips = 0;
 }
 
-// スプリング(ジャンプ台)で真上に強く打ち上げる。前進成分は維持。
+// スプリングで真上へ強く打ち上げる。前進成分は維持。
 export function launchSpring(bike, slope) {
   bike.airborne = true;
   bike.vx = bike.v * Math.cos(slope);
   bike.vy = -config.SPRING_VY;
+  bike.angle = slope;
+  bike.av = 0;
+  bike.flips = 0;
 }
 
-// 放物運動。重力で vy 増加（y下正）。s も移動分だけ進める
-export function stepAirborne(bike) {
-  const dt = config.DT;
+// 空中の運動＋プレイヤーのリーン入力で回転。lean = { up, down }
+export function stepAir(bike, lean, dt = config.DT) {
   bike.vy += config.GRAVITY * dt;
   bike.x += bike.vx * dt;
   bike.y += bike.vy * dt;
   bike.s += Math.hypot(bike.vx, bike.vy) * dt;
-  bike.angle = Math.atan2(bike.vy, bike.vx);
+
+  // 自然に前のめり(角度+)。↑で後傾(−)、↓で前傾(+)。
+  let aAng = config.AIR_PITCH;
+  if (lean && lean.up) aAng -= config.LEAN_ACCEL;
+  if (lean && lean.down) aAng += config.LEAN_ACCEL;
+  bike.av += aAng * dt;
+  if (bike.av > config.LEAN_AV_MAX) bike.av = config.LEAN_AV_MAX;
+  if (bike.av < -config.LEAN_AV_MAX) bike.av = -config.LEAN_AV_MAX;
+  bike.angle += bike.av * dt;
+  bike.flips += Math.abs(bike.av * dt);
+}
+
+// 着地姿勢の判定。車体角と地形傾きの差が許容内なら true。
+export function landingOk(angle, slope) {
+  return Math.abs(normalizeAngle(angle - slope)) <= config.LAND_TOL;
 }
 
 // 着地時、速度ベクトルを地形接線へ射影したスカラー速度を返す
@@ -68,11 +92,17 @@ export function landingTangentSpeed(vx, vy, slope) {
   return vx * tx + vy * ty;
 }
 
-// ループ頂点を保つのに必要な最低速度（円運動 v=√(g·r) に安全係数）
+// ループ頂点を保つのに必要な最低速度（v=√(g·r) に安全係数）
 export function loopRequiredSpeed(r) {
   return Math.sqrt(config.GRAVITY * r) * config.LOOP_SAFETY;
 }
 
 export function canClearLoop(v, r) {
   return v >= loopRequiredSpeed(r);
+}
+
+export function normalizeAngle(a) {
+  while (a > Math.PI) a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
 }

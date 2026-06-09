@@ -1,5 +1,5 @@
 // ベストタイム(秒)を localStorage に保存・読込。失敗時は 0(記録なし)。
-const KEY = 'nitromoto.bestTime';
+const KEY = 'nitromoto.mm.bestTime';
 
 export function loadBest() {
   try {
@@ -15,6 +15,6 @@ export function saveBest(time) {
   try {
     localStorage.setItem(KEY, String(time));
   } catch {
-    // localStorage 不可環境では黙って無視（プレイは継続可能）
+    // localStorage 不可環境では黙って無視
   }
 }
