@@ -135,6 +135,38 @@ test('オーリーで飛べて、着地して戻ってくる', () => {
   assert.ok(r.grounded, '3 秒経っても着地していない');
 });
 
+test('パークのキッカーで実際に飛べる', () => {
+  // パークゾーンを探して、1 本目のテーブルトップへ真っ直ぐ入る
+  let base = null;
+  for (let i = 0; i < 300 && base === null; i++) {
+    if (T.zoneAt(i * 380 + 190).kind === T.ZONE.PARK) base = i * 380;
+  }
+  assert.ok(base !== null, 'パークゾーンが見つからない');
+
+  const r = new Rider();
+  const inp = input();
+  inp.tuck = 1;
+  // キッカーは「トレイル中心からの相対位置」に置かれている。中心に乗せて助走する。
+  const cx = T.trailCenterX(base + 74);
+  r.pos[0] = cx; r.pos[2] = base + 74 - 30;
+  r.pos[1] = T.height(cx, r.pos[2]);
+  r.vel[2] = 24;
+  r.flow = 0.7;
+
+  let maxH = 0, air = 0, landed = null;
+  r.onLand = (impact, clean) => { if (!landed) landed = { impact, clean }; };
+  for (let i = 0; i < 120 * 6; i++) {
+    r.step(DT, inp);
+    maxH = Math.max(maxH, r.airHeight);
+    if (!r.grounded) air += DT;
+  }
+  assert.ok(maxH > 2.0, `キッカーで ${maxH.toFixed(2)}m しか浮かない`);
+  assert.ok(air > 0.6, `滞空 ${air.toFixed(2)}s では飛んだと言えない`);
+  assert.ok(landed, '着地イベントが起きていない');
+  // ランディング斜面が効いていて、まともに着地できること
+  assert.ok(landed.impact < 16, `着地の衝撃 ${landed.impact.toFixed(1)} が大きすぎる`);
+});
+
 test('ミスは即転倒ではなく、バランスを削る', () => {
   const r = new Rider();
   const inp = input();

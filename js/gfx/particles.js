@@ -250,6 +250,36 @@ export function emitPuff(parts, x, y, z, power) {
   }
 }
 
+/**
+ * 高速時のコントレイル。板の後ろに細い雪煙の尾が残る。
+ * 速度の手応えは HUD の数字より、こういう「置いていかれるもの」で伝わる。
+ */
+export function emitContrail(parts, rider, dt, acc) {
+  if (!rider.grounded && rider.airHeight > 3) return acc;
+  const sp = rider.speed;
+  if (sp < 17) return acc;
+  const strength = clamp01((sp - 17) / 13);
+  acc += strength * 44 * dt;
+  const n = Math.floor(acc);
+  acc -= n;
+  const yaw = rider.yaw;
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
+  for (let i = 0; i < n; i++) {
+    const back = 0.8 + parts.rand() * 1.4;
+    parts.spawn(P.CONTRAIL,
+      rider.pos[0] - fx * back + (parts.rand() - 0.5) * 0.7,
+      rider.pos[1] + 0.1 + parts.rand() * 0.55,
+      rider.pos[2] - fz * back + (parts.rand() - 0.5) * 0.7,
+      -fx * sp * 0.10 + (parts.rand() - 0.5) * 0.9,
+      0.25 + parts.rand() * 0.7,
+      -fz * sp * 0.10 + (parts.rand() - 0.5) * 0.9,
+      0.10 + parts.rand() * 0.16,
+      0.55 + parts.rand() * 0.65 * strength,
+      0.7);
+  }
+  return acc;
+}
+
 /** 環境の粉雪。カメラのまわりにゆっくり供給し続ける。 */
 export function emitDrift(parts, camX, camY, camZ, dt, acc, wind) {
   acc += 13 * dt;

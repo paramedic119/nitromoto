@@ -11,7 +11,7 @@ import { Camera } from './play/camera.js';
 import { Trails } from './play/trails.js';
 import { Net } from './play/net.js';
 import { Renderer } from './gfx/renderer.js';
-import { Particles, emitRide, emitBurst, emitPuff, emitDrift, P } from './gfx/particles.js';
+import { Particles, emitRide, emitBurst, emitPuff, emitDrift, emitContrail, P } from './gfx/particles.js';
 import { Hud } from './ui/hud.js';
 import { Audio } from './audio/engine.js';
 
@@ -64,7 +64,7 @@ const app = {
   fpsAvg: 60,
   sprayAcc: 0,
   driftAcc: 0,
-  trailAcc: 0,
+  trailAcc: 0,   // コントレイルの端数
   props: [],
   propZ: -1e9,
   catchUp: 0,
@@ -281,6 +281,7 @@ function frame(now) {
   // --- パーティクル ---
   app.wind = 0.7 + 0.5 * Math.sin(app.time * 0.13) + 0.3 * Math.sin(app.time * 0.41);
   app.sprayAcc = emitRide(particles, rider, dt, app.sprayAcc);
+  app.trailAcc = emitContrail(particles, rider, dt, app.trailAcc);
   app.driftAcc = emitDrift(particles, camera.pos[0], camera.pos[1], camera.pos[2],
     dt, app.driftAcc, app.wind);
   particles.update(dt, app.wind * 0.4);
@@ -344,4 +345,5 @@ function emitTrail(dt) {
 requestAnimationFrame(frame);
 
 // デバッグ用の窓口
-window.BLUEBIRD = { rider, camera, chunks, renderer, app, particles, get net() { return net; }, Terrain };
+window.BLUEBIRD = { rider, camera, chunks, renderer, app, particles, audio, trails,
+  get net() { return net; }, Terrain };

@@ -177,7 +177,7 @@ export function poseRider(out, r) {
   const torsoM = trs(_scratch, hipX * 1.1, hipY + 0.02, 0, torsoYaw, torsoPitch, torsoLean);
   M4.multiply(_tmpM, _boardM, torsoM);
   put(BONE.TORSO, _tmpM);
-  const torsoWorld = M4.copy(M4.create(), _tmpM);
+  const torsoWorld = M4.copy(_torsoW, _tmpM);
 
   // 頭。進行方向を見る（上体の捻りを打ち消す方向）。
   const headM = trs(_scratch2, 0, 0.58, 0, -torsoYaw * 0.55, -torsoPitch * 0.7 + 0.06, 0);
@@ -207,6 +207,7 @@ export function poseRider(out, r) {
 
 const _scratch = M4.create();
 const _scratch2 = M4.create();
+const _torsoW = M4.create();
 
 /* ------------------------------------------------------- レンダラ */
 
@@ -508,6 +509,7 @@ export class Renderer {
     // 木の kind は iPhase.y に入っているが、形の差はメッシュではなくスケールで出す。
     let entry = this.treeVAOCache.get(chunk);
     if (!entry || entry.buf !== chunk.treeBuf) {
+      if (entry) gl.deleteVertexArray(entry.vao);
       const m = this.treeMesh;
       const vao = createVAO(gl, meshAttribs(gl, m, [
         { buffer: chunk.treeBuf, loc: 4, size: 3, stride: TREE_STRIDE * 4, offset: 0, divisor: 1 },
