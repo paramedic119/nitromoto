@@ -11,6 +11,10 @@ import { SEED } from '../world/terrain.js';
 
 const SEND_HZ = 15;
 const TIMEOUT = 6000;
+// 自動検出でリレーが見つからないときに諦めるまでの試行回数。
+// 静的ホスティング（Cloudflare Pages / GitHub Pages など）に置かれている場合、
+// 粘っても繋がらないうえコンソールを汚し続けるので、数回でやめる。
+const MAX_AUTO_RETRY = 3;
 
 const TINTS = [
   [0.94, 0.36, 0.24], [0.24, 0.60, 0.92], [0.98, 0.76, 0.22], [0.40, 0.82, 0.52],
@@ -84,7 +88,11 @@ class Peer {
 
 export class Net {
   constructor(opts = {}) {
-    this.url = opts.url || autoUrl();
+    const auto = autoUrl();
+    this.url = opts.url || auto.url;
+    // 明示指定されたときだけ粘って再接続する
+    this.explicit = !!opts.url || auto.explicit;
+    this.everConnected = false;
     this.name = (opts.name || 'ゲスト').slice(0, 12);
     this.status = 'offline';
     this.id = null;
@@ -115,6 +123,7 @@ export class Net {
 
     ws.onopen = () => {
       this._retry = 0;
+      this.everConnected = true;
       ws.send(JSON.stringify({ t: 'hi', name: this.name, seed: SEED }));
     };
     ws.onmessage = (ev) => this._onMessage(ev.data);
@@ -135,8 +144,17 @@ export class Net {
   }
 
   _scheduleRetry() {
-    this._retry = Math.min(this._retry + 1, 6);
-    this._retryAt = performance.now() + Math.min(30000, 1500 * 2 ** (this._retry - 1));
+    this._retry++;
+    // 自動検出で一度も繋がったことがないなら、リレーは無いと判断して静かに諦める。
+    // 一度でも繋がっていれば、サーバの再起動かもしれないので粘る。
+    if (!this.explicit && !this.everConnected && this._retry >= MAX_AUTO_RETRY) {
+      this._enabled = false;
+      this.url = null;
+      this.status = 'offline';
+      return;
+    }
+    this._retryAt = performance.now()
+      + Math.min(30000, 1500 * 2 ** Math.min(this._retry - 1, 5));
   }
 
   _onMessage(data) {
@@ -235,20 +253,26 @@ function hashId(id) {
   return Math.abs(h);
 }
 
+// リレーを置けないことが分かっている静的ホスティング。ここでは最初から繋ぎにいかない。
+const STATIC_HOSTS =
+  /\.(github\.io|pages\.dev|workers\.dev|netlify\.app|vercel\.app|web\.app|firebaseapp\.com)$/i;
+
 /**
  * サーバの URL を決める。
- * ・?server=wss://... で明示指定
- * ・同じホストで配信されているなら同ホストの /ws
- * ・GitHub Pages のような静的ホストでは指定がない限り繋ぎにいかない
+ * ・?server=wss://... で明示指定（このときは粘って再接続する）
+ * ・同じホストで配信されているなら同ホストの /ws を試す
+ * ・静的ホスティングと分かっていれば最初から繋ぎにいかない
+ *
+ * 独自ドメインの静的ホスティングはここでは判別できないが、
+ * その場合も数回失敗した時点で諦めるようにしてある（_scheduleRetry）。
  */
 function autoUrl() {
   const q = new URLSearchParams(location.search);
   const explicit = q.get('server');
-  if (explicit) return explicit;
-  if (q.get('solo') === '1') return null;
-  if (location.protocol === 'file:') return null;
-  // 静的ホスティング（GitHub Pages 等）にはリレーがないので繋ぎにいかない
-  if (/\.github\.io$/i.test(location.hostname)) return null;
+  if (explicit) return { url: explicit, explicit: true };
+  if (q.get('solo') === '1') return { url: null, explicit: false };
+  if (location.protocol === 'file:') return { url: null, explicit: false };
+  if (STATIC_HOSTS.test(location.hostname)) return { url: null, explicit: false };
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${location.host}/ws`;
+  return { url: `${proto}//${location.host}/ws`, explicit: false };
 }
