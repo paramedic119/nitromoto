@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "motocross",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8000"],
-      "port": 8000
+      "name": "bluebird",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server/server.js", "8080"],
+      "port": 8080
     }
   ]
 }

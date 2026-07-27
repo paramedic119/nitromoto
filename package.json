@@ -1,10 +1,11 @@
 {
-  "name": "nitromoto",
+  "name": "bluebird",
   "version": "1.0.0",
-  "description": "ニトロを溜めて放つ、スマホ向けモトクロス・エンドレスラン",
+  "description": "無限に続く山を、ただ気持ちよく滑り降りるスノーボード。ライブラリも外部アセットもゼロ。",
   "type": "module",
   "private": true,
   "scripts": {
+    "start": "node server/server.js",
     "test": "node --test"
   }
 }
