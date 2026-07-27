@@ -70,7 +70,7 @@ function meshAttribs(gl, m, extra = []) {
 
 const _bones = new Float32Array(BONE_COUNT * 16);
 const _tmpM = M4.create();
-const _boardM = M4.create();
+const _rootM = M4.create();
 const _up = [0, 1, 0], _fwd = [0, 0, 1], _right = [1, 0, 0];
 
 // 位置と Y→X→Z オイラー角とスケールから 4x4 を作る
@@ -96,12 +96,15 @@ function trs(out, px, py, pz, ry, rx, rz, sx = 1, sy = 1, sz = 1) {
 }
 
 /**
- * ライダーのボーン行列を作る。
- * 体はボードのローカル座標で組み立て、最後にボードのワールド行列を掛ける。
- * カービング中は板が寝ても上体は起きている（アンギュレーション）ようにしてある。
+ * スキーヤーのボーン行列を作る。
+ * 体は「板の座標系」ではなく「進行方向を向いた腰の座標系」で組む。
+ * スノーボードと違い、スキーは上体も板も同じ方を向いているので素直に積める。
+ *
+ * カービング中は板が寝ても上体は起きている（アンギュレーション）。
+ * 内足がわずかに前に出て、外足に荷重が乗る。ターン切り替えでストックを突く。
  */
 export function poseRider(out, r) {
-  // --- ボードのワールド姿勢 ---
+  // --- 全体のワールド姿勢 ---
   V3.copy(_up, r.up || [0, 1, 0]);
   V3.normalize(_up, _up);
   _fwd[0] = Math.sin(r.yaw); _fwd[1] = 0; _fwd[2] = Math.cos(r.yaw);
@@ -109,100 +112,116 @@ export function poseRider(out, r) {
   if (V3.lenSq(_fwd) < 1e-6) { _fwd[0] = 0; _fwd[1] = 0; _fwd[2] = 1; }
   V3.normalize(_fwd, _fwd);
 
-  // ロール（エッジ角）を前方軸まわりに掛ける
+  // ロール（エッジ角）を前方軸まわりに掛ける。
+  // 正のロールで「右へ傾く」= 右ターンで内側へ倒れ込む向き。
   const roll = r.roll || 0;
   V3.cross(_right, _up, _fwd);
   V3.normalize(_right, _right);
   const cr = Math.cos(roll), sr = Math.sin(roll);
-  const ux = _up[0] * cr - _right[0] * sr;
-  const uy = _up[1] * cr - _right[1] * sr;
-  const uz = _up[2] * cr - _right[2] * sr;
-  const rx = _right[0] * cr + _up[0] * sr;
-  const ry = _right[1] * cr + _up[1] * sr;
-  const rz = _right[2] * cr + _up[2] * sr;
+  const ux = _up[0] * cr + _right[0] * sr;
+  const uy = _up[1] * cr + _right[1] * sr;
+  const uz = _up[2] * cr + _right[2] * sr;
+  const rx = _right[0] * cr - _up[0] * sr;
+  const ry = _right[1] * cr - _up[1] * sr;
+  const rz = _right[2] * cr - _up[2] * sr;
   _up[0] = ux; _up[1] = uy; _up[2] = uz;
   _right[0] = rx; _right[1] = ry; _right[2] = rz;
 
-  M4.fromBasis(_boardM, _right, _up, _fwd, r.pos);
+  M4.fromBasis(_rootM, _right, _up, _fwd, r.pos);
 
-  // 転倒中は前方軸まわりに転がる
   if (r.tumble) {
     const t = r.tumble;
-    trs(_tmpM, 0, 0.4, 0, 0, t, t * 0.7);
-    M4.multiply(_boardM, _boardM, _tmpM);
+    trs(_tmpM, 0, 0.45, 0, t * 0.35, t, t * 0.6);
+    M4.multiply(_rootM, _rootM, _tmpM);
   }
 
-  // --- ボードローカルで体を組む ---
+  // --- ローカルで体を組む ---
   const crouch = clamp01(r.crouch || 0);
   const edge = clamp(r.edge || 0, -1, 1);
   const grab = clamp01(r.grab || 0);
   const wob = clamp01(r.wobble || 0);
+  const wedge = clamp01(r.wedge || 0);
+  const tuck = clamp01(r.tuckAmt || 0);
   const air = r.grounded === false;
   const t = r.animT || 0;
 
-  const legLen = 0.68 * (1 - crouch * 0.42) * (1 - grab * 0.20);
-  const hipY = legLen + 0.05;
-  // 板が寝たぶんだけ腰を内側へ入れて、上体は起こす
-  const angul = -roll;
-  const hipX = angul * 0.20 + wob * Math.sin(t * 9.3) * 0.05;
-
   const put = (bone, m) => _bones.set(m, bone * 16);
-  const localToWorld = (bone, local) => {
-    M4.multiply(_tmpM, _boardM, local);
-    put(bone, _tmpM);
-  };
+  const local = (bone, m) => { M4.multiply(_tmpM, _rootM, m); put(bone, _tmpM); };
 
-  // ボード本体
-  put(BONE.BOARD, _boardM);
+  // --- スキー板 ---
+  // プルーク（ハの字）ではトップが寄ってテールが開く。
+  // カーブ中は内足がわずかに前へ出る（実際のスキーの「内足リード」）。
+  const stance = 0.138 + wedge * 0.055 + Math.abs(edge) * 0.018;
+  const lead = 0.075 * edge;
+  const skiSpec = [
+    [BONE.SKI_L, -1],
+    [BONE.SKI_R, 1],
+  ];
+  for (const [bone, side] of skiSpec) {
+    const inner = Math.sign(edge) === side;              // 内足かどうか
+    const zOff = inner ? Math.abs(lead) : -Math.abs(lead) * 0.35;
+    // 外足のほうが深くエッジが立つ
+    const extraRoll = -edge * (inner ? 0.05 : 0.16);
+    local(bone, trs(_scratch,
+      side * stance, 0.008, zOff,
+      -side * wedge * 0.36, 0, extraRoll));
+  }
 
-  // ブーツ（バインディングに固定）
-  const stance = 0.20;
-  localToWorld(BONE.BOOT_F, trs(_scratch, 0, 0.01, stance, 0.30, 0, 0));
-  localToWorld(BONE.BOOT_B, trs(_scratch, 0, 0.01, -stance, -0.16, 0, 0));
+  // --- 脚 ---
+  const legLen = 0.72 * (1 - crouch * 0.45) * (1 - tuck * 0.18);
+  const hipY = legLen + 0.04;
+  const angul = -roll;
+  const hipX = angul * 0.19 + wob * Math.sin(t * 9.3) * 0.05;
 
-  // 脚。腰へ向けて傾ける。
-  const legTiltF = Math.atan2(hipX, hipY);
-  localToWorld(BONE.LEG_F, trs(_scratch, 0, 0.11, stance,
-    0.22, 0, legTiltF, 1, legLen / 0.56, 1));
-  localToWorld(BONE.LEG_B, trs(_scratch, 0, 0.11, -stance,
-    -0.12, 0, legTiltF, 1, legLen / 0.56, 1));
+  for (const [bone, side, ski] of [[BONE.LEG_L, -1, BONE.SKI_L], [BONE.LEG_R, 1, BONE.SKI_R]]) {
+    const footX = side * stance;
+    // 膝から上を腰へ寄せる。プルークでも「ハの字＋A フレーム」に見える。
+    const tilt = Math.atan2(hipX - footX * 0.88, hipY);
+    local(bone, trs(_scratch, footX, 0.19, 0,
+      0, -0.10 - crouch * 0.16, tilt, 1, legLen / 0.53, 1));
+  }
 
-  // 腰
-  localToWorld(BONE.PELVIS, trs(_scratch, hipX, hipY, 0, 0.28, 0, angul * 0.35));
+  // --- 腰 ---
+  local(BONE.PELVIS, trs(_scratch, hipX, hipY, 0, 0, 0, angul * 0.30));
 
-  // 上体。板より正面（トゥサイド）を向く。旋回の反対へわずかに捻る。
-  const torsoYaw = 1.02 + edge * 0.22 - (r.spinRate || 0) * 0.03;
-  const torsoLean = angul * 0.60 + crouch * 0.10;
-  const torsoPitch = (air ? 0.14 : 0.08) + crouch * 0.30 + grab * 0.45;
-  const torsoM = trs(_scratch, hipX * 1.1, hipY + 0.02, 0, torsoYaw, torsoPitch, torsoLean);
-  M4.multiply(_tmpM, _boardM, torsoM);
+  // --- 上体。落下線を向いたまま、板だけが回っていく ---
+  const torsoYaw = -edge * 0.26 - (r.spinRate || 0) * 0.02;
+  const torsoLean = angul * 0.55;
+  const torsoPitch = 0.13 + crouch * 0.36 + tuck * 0.62 + grab * 0.40 + (air ? 0.06 : 0);
+  const torsoM = trs(_scratch, hipX * 1.05, hipY + 0.02, 0, torsoYaw, torsoPitch, torsoLean);
+  M4.multiply(_tmpM, _rootM, torsoM);
   put(BONE.TORSO, _tmpM);
   const torsoWorld = M4.copy(_torsoW, _tmpM);
 
-  // 頭。進行方向を見る（上体の捻りを打ち消す方向）。
-  const headM = trs(_scratch2, 0, 0.58, 0, -torsoYaw * 0.55, -torsoPitch * 0.7 + 0.06, 0);
-  M4.multiply(_tmpM, torsoWorld, headM);
-  put(BONE.HEAD, _tmpM);
+  // --- 頭。進行方向を見続ける ---
+  local2(BONE.HEAD, torsoWorld, trs(_scratch2, 0, 0.545, 0.01,
+    -torsoYaw * 0.75, -torsoPitch * 0.85 + 0.04, 0));
 
-  // 腕。バランスを取って広げる。グラブ中は前手が板へ伸びる。
-  const swing = Math.sin(t * 1.8) * 0.06;
-  const armSpreadL = 0.95 - edge * 0.55 + swing + wob * 0.5 * Math.sin(t * 7.1);
-  const armSpreadR = 0.95 + edge * 0.55 - swing + wob * 0.5 * Math.cos(t * 6.3);
-  const armFwd = air ? 0.35 : 0.12;
-
-  const grabReach = grab * 1.5;
-  const armLM = trs(_scratch2, -0.20, 0.45, 0.02,
-    0, armFwd - grabReach * 0.5, -armSpreadL + grabReach * 0.9);
-  M4.multiply(_tmpM, torsoWorld, armLM);
-  put(BONE.ARM_L, _tmpM);
-
-  const armRM = trs(_scratch2, 0.20, 0.45, 0.02,
-    0, armFwd + (air ? 0.2 : 0), armSpreadR);
-  M4.multiply(_tmpM, torsoWorld, armRM);
-  put(BONE.ARM_R, _tmpM);
+  // --- 腕とストック ---
+  // 構えは前方やや外。ターンの切り替えで内側のストックを突く。
+  const plant = clamp01(r.poleTimer || 0);
+  const plantSide = r.poleSide || 0;
+  const swing = Math.sin(t * 1.6) * 0.05;
+  for (const [bone, side] of [[BONE.ARM_L, -1], [BONE.ARM_R, 1]]) {
+    const isPlanting = plant > 0 && plantSide === side;
+    // 突く瞬間だけ、腕を前へ送って肘を伸ばす
+    const p = isPlanting ? Math.sin(plant * Math.PI) : 0;
+    const spread = 0.46 + side * edge * 0.18 + swing * side
+      + wob * 0.45 * Math.sin(t * 7.1 + side)
+      - tuck * 0.30 - p * 0.12;
+    // 手は前。Rx が正だと腕が後ろへ回るので符号を反転させてある。
+    const fwd = -(0.34 + (air ? 0.26 : 0) + tuck * 0.50 + p * 0.70 - grab * 0.45);
+    local2(bone, torsoWorld, trs(_scratch2,
+      side * 0.180, 0.425, 0.05, 0, fwd, side * spread));
+  }
 
   out.set(_bones);
   return out;
+}
+
+function local2(bone, parentWorld, m) {
+  M4.multiply(_tmpM, parentWorld, m);
+  _bones.set(_tmpM, bone * 16);
 }
 
 const _scratch = M4.create();

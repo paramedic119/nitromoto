@@ -3,6 +3,8 @@
 // 雪の上を滑る音は「ノイズをバンドパスに通したもの」で、
 // カットオフを速度で、Q をエッジ角で動かすと、驚くほどそれらしく聞こえる。
 //   パウダー = 低くて柔らかい / 圧雪 = 中域でざらつく / アイス = 高くて硬い
+// スキーはエッジが 2 枚あるので、わずかにずらした 2 つの共振を重ねている。
+// この「ずれ」があるだけで、板 1 枚ではなく 2 枚に聞こえる。
 
 import { clamp, clamp01, lerp } from '../core/math.js';
 import { SURFACE } from '../world/terrain.js';
@@ -37,16 +39,22 @@ export class Sfx {
     this.snowSrc.start();
 
     /* ---------------- エッジの唸り（カービング）---------------- */
-    // 高い Q のバンドパス。深く倒すほど「シャーッ」から「ズオーッ」へ変わる。
+    // 高い Q のバンドパスを 2 本。深く倒すほど「シャーッ」から「ズオーッ」へ。
     this.edgeSrc = engine.noiseSource();
-    this.edgeFilter = ctx.createBiquadFilter();
-    this.edgeFilter.type = 'bandpass';
-    this.edgeFilter.frequency.value = 1800;
-    this.edgeFilter.Q.value = 7;
     this.edgeGain = ctx.createGain();
     this.edgeGain.gain.value = 0;
-    this.edgeSrc.connect(this.edgeFilter);
-    this.edgeFilter.connect(this.edgeGain);
+    this.edgeFilters = [];
+    for (const detune of [1.0, 1.055]) {          // 内足と外足のわずかなずれ
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = 1800 * detune;
+      f.Q.value = 7;
+      f._detune = detune;
+      this.edgeSrc.connect(f);
+      f.connect(this.edgeGain);
+      this.edgeFilters.push(f);
+    }
+    this.edgeFilter = this.edgeFilters[0];        // 互換のため
     this.edgeGain.connect(engine.master);
     this.edgeGain.connect(engine.send);
     this.edgeSrc.start();
@@ -115,10 +123,12 @@ export class Sfx {
     // 「削っていない、きれいに乗っている」ときに一番よく鳴る。
     const carveClean = edge * (1 - clamp01(skid * 1.6));
     const edgeLevel = contact * carveClean * clamp01(sp / 8) * 0.075;
-    this.edgeGain.gain.setTargetAtTime(edgeLevel, t, 0.07);
-    this.edgeFilter.frequency.setTargetAtTime(
-      clamp(420 + sp * 62 + edge * 620, 200, 6000), t, 0.09);
-    this.edgeFilter.Q.setTargetAtTime(4 + edge * 12, t, 0.09);
+    this.edgeGain.gain.setTargetAtTime(edgeLevel * 0.62, t, 0.07);
+    const edgeF = clamp(420 + sp * 62 + edge * 620, 200, 6000);
+    for (const f of this.edgeFilters) {
+      f.frequency.setTargetAtTime(edgeF * f._detune, t, 0.09);
+      f.Q.setTargetAtTime(4 + edge * 12, t, 0.09);
+    }
 
     /* --- 風 --- */
     const windLevel = (0.006 + sn * sn * 0.085) * (air ? 1.35 : 1) + wind * 0.0035;
@@ -173,7 +183,14 @@ export class Sfx {
     return g;
   }
 
-  /** オーリー。板が撓んで、雪をパッと蹴る。 */
+  /** ストックを突く。カチッという短い衝撃音。ターンのリズムがここで刻まれる。 */
+  polePlant(side, speed) {
+    const p = clamp01(speed / 20);
+    this._burst({ dur: 0.055, freq: 3400, q: 3.0, gain: 0.045 + p * 0.055, sweep: 0.5 });
+    this._tone({ freq: 620, to: 240, dur: 0.05, gain: 0.020 + p * 0.020, type: 'triangle' });
+  }
+
+  /** 抜重してのジャンプ。板が撓みを返して、雪をパッと蹴る。 */
   pop(power) {
     this._burst({ dur: 0.10, freq: 1900 + power * 1300, q: 1.1, gain: 0.10 + power * 0.13, sweep: 0.35 });
     this._tone({ freq: 320 + power * 260, to: 110, dur: 0.13, gain: 0.05 + power * 0.05, type: 'triangle' });

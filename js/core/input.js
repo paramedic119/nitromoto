@@ -110,7 +110,7 @@ export class Input {
     this.tuck = damp(this.tuck, tuckTarget, 9, dt);
     this.brake = damp(this.brake, brakeTarget, 14, dt);
 
-    // --- オーリー ---
+    // --- 抜重ジャンプ / グラブ ---
     const ollie = this.down('ollie') || padOllie || this._touch.ollie;
     this.olliePressed = ollie && !this._prevOllie;
     this.ollieReleased = !ollie && this._prevOllie;

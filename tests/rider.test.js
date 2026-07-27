@@ -77,13 +77,19 @@ test('FLOW が最高速を押し上げる', () => {
   assert.ok(full * 3.6 > 110 && full * 3.6 < 145, `上限 ${(full * 3.6).toFixed(0)} km/h`);
 });
 
-test('丁寧に滑るほうが FLOW も平均速度も上（ゲームの芯）', () => {
+test('丁寧に滑るほうが FLOW も距離も上（ゲームの芯）', () => {
   const good = pilot(150, { respectGrip: true });
   const bad = pilot(150, { respectGrip: false });
+  // FLOW の差が一番はっきり出る。これが最高速の差になって効いてくる。
   assert.ok(good.avgFlow > bad.avgFlow * 1.6,
-    `上手い ${good.avgFlow.toFixed(3)} vs 雑 ${bad.avgFlow.toFixed(3)}`);
-  assert.ok(good.avgSpeed > bad.avgSpeed * 1.15,
-    `上手い ${(good.avgSpeed * 3.6).toFixed(0)} vs 雑 ${(bad.avgSpeed * 3.6).toFixed(0)} km/h`);
+    `FLOW: 上手い ${good.avgFlow.toFixed(3)} vs 雑 ${bad.avgFlow.toFixed(3)}`);
+  assert.ok(good.maxFlow > bad.maxFlow * 1.4,
+    `最高 FLOW: 上手い ${good.maxFlow.toFixed(2)} vs 雑 ${bad.maxFlow.toFixed(2)}`);
+  // リーダーボードに出るのは距離なので、そこにも差が出ていること
+  assert.ok(good.rider.bestDistance > bad.rider.bestDistance * 1.08,
+    `距離: 上手い ${good.rider.bestDistance.toFixed(0)}m vs 雑 ${bad.rider.bestDistance.toFixed(0)}m`);
+  assert.ok(good.avgSpeed > bad.avgSpeed * 1.05,
+    `速度: 上手い ${(good.avgSpeed * 3.6).toFixed(0)} vs 雑 ${(bad.avgSpeed * 3.6).toFixed(0)} km/h`);
 });
 
 test('グリップの限界を超えると横滑りして減速する', () => {

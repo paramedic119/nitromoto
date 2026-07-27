@@ -203,10 +203,11 @@ export function emitRide(parts, rider, dt, acc) {
 
   for (let i = 0; i < n; i++) {
     const t = parts.rand();
-    // 板に沿った位置
+    // 板に沿った位置。左右 2 枚のどちらかから出る（外足のほうが多い）。
     const along = (t - 0.5) * 1.5;
-    const ox = fx * along + rx * side * 0.13;
-    const oz = fz * along + rz * side * 0.13;
+    const ski = parts.rand() < 0.72 ? side : -side;
+    const ox = fx * along + rx * (side * 0.10 + ski * 0.17);
+    const oz = fz * along + rz * (side * 0.10 + ski * 0.17);
     const spread = 0.9 + strength * 2.6;
     const up = 0.9 + strength * 4.6 + powder * sp * 0.22;
     parts.spawn(

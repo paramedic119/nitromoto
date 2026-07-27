@@ -1,4 +1,4 @@
-// カービングの軌跡。
+// シュプール（滑走の軌跡）。
 //
 // ワールド空間を span メートル周期でタイリングした 1 枚のテクスチャに書き込む。
 // テクセルは「ワールド座標 mod span」に固定で対応するので、原点を動かす必要がない。
@@ -111,7 +111,7 @@ export class Trails {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  /** 1 ストローク積む。dir はボードの進行方向。 */
+  /** 1 ストローク積む。dir は進行方向。スキーは左右 2 本ぶん呼ばれる。 */
   stroke(x, z, dirX, dirZ, halfLen, halfWidth, depth) {
     if (this.count >= MAX_STROKES) return;
     const i = this.count++;

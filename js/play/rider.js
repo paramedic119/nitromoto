@@ -1,10 +1,12 @@
-// ライダーの物理。ゲームの手触りのほぼ全部がここにある。
+// スキーヤーの物理。ゲームの手触りのほぼ全部がここにある。
 //
 // 設計の芯:
-//   ボードは「横滑りをグリップの限界まで打ち消す板」としてだけモデル化する。
-//   カービングもドリフトも減速も、そこから勝手に生まれる。
-//     ・ゆっくり丁寧にボードを回す → 横滑りが小さい → グリップが吸収 → 削れない → 速くなる
+//   板は「横滑りをグリップの限界まで打ち消すもの」としてだけモデル化する。
+//   カービングもずらしも減速も、そこから勝手に生まれる。
+//     ・ゆっくり丁寧に板を回す → 横滑りが小さい → エッジが吸収 → 削れない → 速くなる
 //     ・速く雑に回す → 横滑りがグリップを超える → ずれる → 削れる → 遅くなる
+//   スキーはエッジが 2 枚あるぶん立ち上がりが速く、プルーク（ハの字）で
+//   低速でも確実に止まれる。そのぶん逆向き（スイッチ）の着地は苦手。
 //   そして FLOW が最高速そのものを上げるので、
 //     「丁寧に滑る → 速くなる → 丁寧に滑るのが難しくなる」
 //   という自己調整ループが自然に閉じる。設計で難易度を押し付ける必要がない。
@@ -28,23 +30,27 @@ export const CFG = {
   SKATE_SPEED: 3.4,         // これ以下では足で漕げる (m/s)
   SKATE_PUSH: 3.6,          // 漕ぎの加速度 (m/s^2)
 
-  // --- ボードを 1.45m の梁として扱う。小さい凹凸は板が跨いで均す ---
+  // --- 板を梁として扱う。小さい凹凸は板が跨いで均す。 ---
+  // 板の全長は 1.65m だが、雪に当たっているのはトップロッカーを除いた
+  // 有効エッジ長（約 1.45m）なので、その半分を使う。
   BOARD_HALF: 0.72,
 
   // --- ステアリングとグリップ ---
-  YAW_RATE: 1.78,           // フルスティックでボードを回す角速度 (rad/s)
+  YAW_RATE: 1.95,           // フルスティックで板を回す角速度 (rad/s)
   YAW_RATE_HI: 0.62,        // 高速時に落ちる割合
-  ALIGN_RATE: 2.4,          // 無入力時にボードが進行方向へ戻る速さ
-  GRIP_ACCEL: 21.0,         // エッジが受け持てる横加速度の基準 (m/s^2)
+  ALIGN_RATE: 2.4,          // 無入力時に板が進行方向へ戻る速さ
+  GRIP_ACCEL: 23.0,         // エッジ 2 枚が受け持てる横加速度の基準 (m/s^2)
   SKID_SCRUB: 1.35,         // 横滑り 1 m/s あたりの減速 (m/s^2)
-  BRAKE_DECEL: 15.0,        // ブレーキ（ずらし）の減速
-  BRAKE_YAW: 0.85,          // ブレーキ中に板が横を向く量
+  BRAKE_DECEL: 17.0,        // プルーク（ハの字）の減速
+  BRAKE_YAW: 0.80,          // ずらしターン時に板が横を向く量
+  WEDGE_GRIP: 0.35,         // プルーク中に増えるグリップ（両エッジが効く）
 
   // --- 空中 ---
+  POLE_TIME: 0.34,          // ストックを突いている時間 (s)
   AIR_SPIN_ACCEL: 7.0,      // 空中で回転を掛ける速さ
   AIR_SPIN_MAX: 6.2,        // 最大角速度 (rad/s)
   GRAB_SPIN_MUL: 1.42,      // グラブ中の回転倍率
-  OLLIE_V: 6.2,             // フルチャージのオーリー初速 (m/s)
+  OLLIE_V: 6.0,             // 抜重をフルに溜めたときのジャンプ初速 (m/s)
   OLLIE_MIN: 0.34,          // 溜めなしでも出る割合
   CHARGE_TIME: 0.42,        // フルチャージまでの秒数
 
@@ -57,6 +63,7 @@ export const CFG = {
   LAND_SOFT: 7.0,           // これ以下の衝突速度ならノーダメージ (m/s)
   LAND_HARD: 15.5,          // これを超えると大きくバランスを失う
   LAND_ANGLE_OK: 0.38,      // 着地の許容ずれ角 (rad)
+  SWITCH_PENALTY: 0.55,     // 逆向き着地のペナルティ（スキーは板より苦手）
 
   // --- FLOW ---
   // 上手い人で 25 秒、普通に滑って 60〜80 秒で満タンになるくらい。
@@ -72,7 +79,7 @@ export const CFG = {
   BAL_SKID_LOSS: 0.30,
   BAL_WOBBLE: 0.55,         // これを下回るとよろけ始める
 
-  RIDE_HEIGHT: 0.06,        // ボード裏から接地点までの余裕
+  RIDE_HEIGHT: 0.06,        // 滑走面から接地点までの余裕
   WIPEOUT_TIME: 1.9,        // 転倒してから復帰までの秒数
 };
 
@@ -89,7 +96,7 @@ export class Rider {
   constructor() {
     this.pos = [0, 0, 0];
     this.vel = [0, 0, 0];
-    this.yaw = 0;              // ボードの向き。0 = +Z（落下線方向）
+    this.yaw = 0;              // 板の向き。0 = +Z（落下線方向）
     this.roll = 0;             // 見た目の傾き（エッジ角から作る）
     this.pitch = 0;            // 見た目の前後傾
     this.up = [0, 1, 0];       // 接地面の法線（空中では徐々に鉛直へ）
@@ -108,6 +115,10 @@ export class Rider {
     this.skid = 0;             // 横滑り量 m/s
     this.skidNorm = 0;         // 0..1 に正規化した横滑り
     this.chatter = 0;          // 0..1 板のバタつき
+    this.wedge = 0;            // 0..1 プルーク（ハの字）の開き
+    this.tuckAmt = 0;          // 0..1 タックの深さ（見た目用）
+    this.poleTimer = 0;        // ストックを突いている残り時間の正規化値
+    this.poleSide = 0;         // 突いている側 -1 左 / +1 右
     this.crouch = 0;
     this.charge = 0;
     this.grab = 0;
@@ -138,6 +149,7 @@ export class Rider {
     this.onRespawn = null;
     this.onTrick = null;       // (name, degrees)
     this.onCarveTick = null;   // (intensity)
+    this.onPolePlant = null;   // (side, speed)
 
     this._prevSteer = 0;
     this._jerk = 0;
@@ -145,6 +157,7 @@ export class Rider {
     this._popCooldown = 0;
     this._vyPrev = 0;
     this._velPrev = [0, 0, 0];
+    this._edgeSign = 0;
     this.respawn();
   }
 
@@ -163,6 +176,8 @@ export class Rider {
     this.speed = 4;
     this.distance = 0;
     this.edge = 0; this.skid = 0; this.skidNorm = 0; this.chatter = 0;
+    this.wedge = 0; this.tuckAmt = 0; this.poleTimer = 0; this.poleSide = 0;
+    this._edgeSign = 0;
     this._vyPrev = 0;
     this._velPrev[0] = 0; this._velPrev[1] = 0; this._velPrev[2] = 4;
     this.crouch = 0; this.charge = 0; this.grab = 0;
@@ -175,8 +190,8 @@ export class Rider {
   }
 
   /**
-   * ボードの接地面。ノーズ・センター・テールの 3 点から求める。
-   * スノーボードは 1.45m の剛体の梁なので、それより短い波長の凹凸は跨いで均される。
+   * 板の接地面。トップ・センター・テールの 3 点から求める。
+   * 有効エッジ 1.45m の剛体の梁なので、それより短い波長の凹凸は跨いで均される。
    * これがないと、細かいノイズを全部拾って高速域が暴れる。
    * out = [y, nx, ny, nz]
    */
@@ -215,6 +230,7 @@ export class Rider {
     this._noiseT += dt;
     this.trickTimer = Math.max(0, this.trickTimer - dt);
     this._popCooldown = Math.max(0, this._popCooldown - dt);
+    if (this.poleTimer > 0) this.poleTimer = Math.max(0, this.poleTimer - dt / CFG.POLE_TIME);
 
     if (this.state === STATE.WIPEOUT) {
       this._stepWipeout(dt);
@@ -296,7 +312,7 @@ export class Rider {
     this.state = STATE.RIDE;
     _n[0] = g[1]; _n[1] = g[2]; _n[2] = g[3];
 
-    // ボードの前方向。
+    // 板の前方向。
     // 単純に法線平面へ「投影」すると、水平の向きまで勝手に回ってしまう
     // （横断勾配のある斜面で、操作していないのに進路が曲がっていく）。
     // 正しくは「水平成分が yaw と一致する接ベクトル」を作る。
@@ -323,12 +339,17 @@ export class Rider {
       if (align > 0) this.yaw += angleDelta(this.yaw, velYaw) * Math.min(1, align * dt);
     }
 
-    // --- 速度をボード座標へ分解 ---
+    // --- 速度を板の座標へ分解 ---
     let vF = V3.dot(this.vel, _f);
     let vR = V3.dot(this.vel, _r);
 
+    // --- プルーク（ハの字）---
+    // 両方のエッジが雪に食い込むので、グリップが増えて低速でも確実に止まれる。
+    this.wedge = damp(this.wedge, input.brake, 11, dt);
+    this.tuckAmt = damp(this.tuckAmt, input.tuck, 9, dt);
+
     // --- 横滑りをグリップで打ち消す（ここが全部の source）---
-    const gripAccel = CFG.GRIP_ACCEL * terr.grip;
+    const gripAccel = CFG.GRIP_ACCEL * terr.grip * (1 + this.wedge * CFG.WEDGE_GRIP);
     const wanted = -vR / dt;                       // 完全に消したい加速度
     const applied = clamp(wanted, -gripAccel, gripAccel);
     vR += applied * dt;
@@ -363,8 +384,9 @@ export class Rider {
     aF -= dir * CFG.AIR_DRAG * vF * vF * airMul;
     // タックの押し出し
     aF += input.tuck * CFG.TUCK_PUSH;
-    // ブレーキ
-    aF -= dir * fade * input.brake * CFG.BRAKE_DECEL;
+    // プルーク制動。摩擦と違い、ほぼ停止まで効かせる。
+    const brakeFade = Math.min(1, Math.abs(vF) / 0.25);
+    aF -= dir * brakeFade * input.brake * CFG.BRAKE_DECEL;
     // 低速では足で漕げる。緩斜面やパウダーで完全に詰むことがなくなる。
     if (vF < CFG.SKATE_SPEED && input.brake < 0.3) {
       aF += CFG.SKATE_PUSH * (1 - vF / CFG.SKATE_SPEED);
@@ -421,7 +443,7 @@ export class Rider {
       this._vyPrev = this.vel[1];
     }
 
-    // --- オーリー ---
+    // --- 抜重ジャンプ ---
     this.crouch = damp(this.crouch, input.ollieHeld ? 1 : input.brake * 0.5, 12, dt);
     if (input.ollieHeld) {
       this.charge = Math.min(1, this.charge + dt / CFG.CHARGE_TIME);
@@ -448,6 +470,17 @@ export class Rider {
     this.ice = terr.ice;
     this.groomedAmt = terr.groomed;
 
+    // --- ストックワーク ---
+    // ターンが切り替わる瞬間に、これから内側になる側を突く。
+    // 実利はないが、スキーのリズムはこれで決まる。
+    const es = Math.abs(this.edge) > 0.16 ? Math.sign(this.edge) : 0;
+    if (es !== 0 && es !== this._edgeSign && this.speed > 5 && this.poleTimer <= 0) {
+      this.poleSide = -es;                 // 内側の手
+      this.poleTimer = 1;
+      if (this.onPolePlant) this.onPolePlant(this.poleSide, this.speed);
+    }
+    if (es !== 0) this._edgeSign = es;
+
     if (this.onCarveTick) {
       const intensity = clamp01(Math.abs(this.edge) * 0.7 + this.skidNorm * 0.9) *
         clamp01(this.speed / 12);
@@ -462,9 +495,11 @@ export class Rider {
     this.airTime += dt;
     this.groundTime = 0;
 
-    // グラブ（空中でオーリーボタン）
+    // グラブ（空中でジャンプボタン）
     this.grab = damp(this.grab, input.ollieHeld ? 1 : 0, 10, dt);
     this.crouch = damp(this.crouch, 0.25 + 0.55 * this.grab, 7, dt);
+    this.wedge = damp(this.wedge, 0, 8, dt);
+    this.tuckAmt = damp(this.tuckAmt, input.tuck * 0.5, 6, dt);
     this.charge = 0;
 
     // スピン
@@ -496,8 +531,11 @@ export class Rider {
     // 着地時の板と進行方向のずれ。逆スタンス（スイッチ）も正解とみなす。
     const velYaw = Math.atan2(this.vel[0], this.vel[2]);
     let off = Math.abs(angleDelta(velYaw, this.yaw));
-    if (off > Math.PI / 2) off = Math.PI - off;    // スイッチ着地
-    const switchLanding = Math.abs(angleDelta(velYaw, this.yaw)) > Math.PI / 2;
+    const switchLanding = off > Math.PI / 2;
+    if (switchLanding) {
+      // 逆向きでも降りられるが、スキーは板ほど得意ではない
+      off = Math.PI - off + CFG.SWITCH_PENALTY;
+    }
 
     const angleBad = clamp01((off - CFG.LAND_ANGLE_OK) / (1.15 - CFG.LAND_ANGLE_OK));
     const hard = clamp01((impact - CFG.LAND_SOFT) / (CFG.LAND_HARD - CFG.LAND_SOFT));
@@ -692,7 +730,7 @@ export class Rider {
     }
     V3.normalize(this.up, this.up);
 
-    // エッジ角に応じてボードを傾ける。深いカーブほど寝る。
+    // エッジ角に応じて板を傾ける。深いカーブほど寝る。
     const targetRoll = this.grounded
       ? -this.edge * 0.92 * clamp01(this.speed / 9)
       : -this.edge * 0.30;

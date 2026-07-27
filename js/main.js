@@ -87,6 +87,8 @@ rider.onPop = (power) => {
 
 rider.onTrick = (name) => { /* 着地時にまとめて表示する */ };
 
+rider.onPolePlant = (side, speed) => audio.polePlant(side, speed);
+
 rider.onTreeHit = (glancing, speed) => {
   emitPuff(particles, rider.pos[0], rider.pos[1], rider.pos[2], speed);
   camera.impulse(glancing ? 0.55 : 1.4);
@@ -310,7 +312,11 @@ function frame(now) {
   if (app.running) hud.update(dt, rider, net);
 }
 
-/** ライダーと他ライダーの通った跡を軌跡テクスチャへ積む。 */
+/**
+ * ライダーの通った跡を軌跡テクスチャへ積む。
+ * スキーなので雪面に残るのは 2 本のシュプール。板の間隔ぶん左右にずらして描く。
+ */
+const SKI_HALF_GAP = 0.17;
 function emitTrail(dt) {
   const stroke = (r, depth) => {
     const last = r._trailLast;
@@ -319,9 +325,14 @@ function emitTrail(dt) {
     const dx = x - last[0], dz = z - last[1];
     const d = Math.hypot(dx, dz);
     if (d < 0.5) return;
-    // 移動区間を 1 枚の細長いクアッドで埋める
-    trails.stroke((x + last[0]) * 0.5, (z + last[1]) * 0.5, dx, dz,
-      d * 0.5 + 0.35, 0.30 + Math.abs(r.edge || 0) * 0.22, depth);
+    // 進行方向に直交する向きへ、板 1 枚ぶんずらした 2 本
+    const nx = -dz / d, nz = dx / d;
+    const gap = SKI_HALF_GAP + Math.abs(r.wedge || 0) * 0.10;
+    const cx = (x + last[0]) * 0.5, cz = (z + last[1]) * 0.5;
+    for (const s of [-1, 1]) {
+      trails.stroke(cx + nx * gap * s, cz + nz * gap * s, dx, dz,
+        d * 0.5 + 0.3, 0.15 + Math.abs(r.edge || 0) * 0.10, depth);
+    }
     last[0] = x; last[1] = z;
   };
 

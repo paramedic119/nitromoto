@@ -491,7 +491,7 @@ layout(location=2) in vec3 aColor;
 layout(location=3) in float aBone;
 
 uniform mat4 uViewProj;
-uniform mat4 uBones[10];
+uniform mat4 uBones[9];
 uniform vec3 uTint;
 
 out vec3 vWorld;
@@ -504,9 +504,10 @@ void main(){
   vec3 n = normalize(mat3(B) * aNormal);
   vWorld = w.xyz;
   vNormal = n;
-  // 真っ白な部分だけをプレイヤー色に置き換える（ジャケットと腕）
-  float isJacket = step(0.985, min(min(aColor.r, aColor.g), aColor.b));
-  vColor = mix(aColor, uTint, isJacket);
+  // 真っ白にしてある部分だけをプレイヤー色に置き換える（ジャケット・腕・板のトップ）。
+  // 板と服の色が揃うので、遠くからでも誰が誰か分かる。
+  float isTinted = step(0.985, min(min(aColor.r, aColor.g), aColor.b));
+  vColor = mix(aColor, uTint, isTinted);
   gl_Position = uViewProj * w;
 }`;
 
@@ -577,7 +578,7 @@ export const shadowRiderVS = V + /* glsl */`
 layout(location=0) in vec3 aPos;
 layout(location=3) in float aBone;
 uniform mat4 uLightViewProj;
-uniform mat4 uBones[10];
+uniform mat4 uBones[9];
 void main(){
   gl_Position = uLightViewProj * (uBones[int(aBone+0.5)] * vec4(aPos,1.0));
 }`;

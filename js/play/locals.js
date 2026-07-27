@@ -41,6 +41,10 @@ class Local {
     this.wobble = 0;
     this.tumble = 0;
     this.spinRate = 0;
+    this.wedge = 0;
+    this.poleTimer = 0;
+    this.poleSide = 0;
+    this._edgeSign = 0;
     this.grounded = true;
     this.speed = 0;
     this.vy = 0;
@@ -70,6 +74,7 @@ class Local {
 
   step(dt, playerZ) {
     this.animT += dt;
+    if (this.poleTimer > 0) this.poleTimer = Math.max(0, this.poleTimer - dt / 0.34);
 
     if (this.down) {
       this.downTimer -= dt;
@@ -130,6 +135,14 @@ class Local {
 
     this.edge = damp(this.edge, clamp(-turn * 1.5, -1, 1) * clamp01(this.speed / 10), 8, dt);
     this.roll = damp(this.roll, -this.edge * 0.85, 9, dt);
+
+    // ターンの切り替えでストックを突く。遠くの人影が「滑っている」ように見える。
+    const es = Math.abs(this.edge) > 0.16 ? Math.sign(this.edge) : 0;
+    if (es !== 0 && es !== this._edgeSign && this.speed > 5 && this.poleTimer <= 0) {
+      this.poleSide = -es;
+      this.poleTimer = 1;
+    }
+    if (es !== 0) this._edgeSign = es;
     this.crouch = 0.1 + (this.grounded ? 0 : 0.35);
     this.grab = this.grounded ? 0 : clamp01((this.rng.s % 97) / 97);
     this.distance = Math.max(this.distance, this.pos[2]);

@@ -50,8 +50,8 @@ export class Camera {
     const sn = clamp01(this._smoothSpeed / 30);
 
     // --- 向き ---
-    // 進行方向をベースに、ボードの向きへ少しだけ寄せる。
-    // 完全にボード追従にすると、スピン中に画面が回りすぎて酔う。
+    // 進行方向をベースに、板の向きへ少しだけ寄せる。
+    // 完全に板追従にすると、スピン中に画面が回りすぎて酔う。
     const velYaw = rider.speed > 2.5
       ? Math.atan2(rider.vel[0], rider.vel[2])
       : rider.yaw;

@@ -27,6 +27,8 @@ class Peer {
     this.up = [0, 1, 0];
     this.yaw = 0; this.roll = 0; this.edge = 0;
     this.crouch = 0.12; this.grab = 0; this.wobble = 0; this.tumble = 0;
+    this.wedge = 0; this.tuckAmt = 0; this.poleTimer = 0; this.poleSide = 0;
+    this._edgeSign = 0;
     this.spinRate = 0; this.grounded = true;
     this.speed = 0; this.distance = 0; this.flow = 0;
     this.visible = false;
@@ -55,6 +57,7 @@ class Peer {
 
   step(dt) {
     this.animT += dt;
+    if (this.poleTimer > 0) this.poleTimer = Math.max(0, this.poleTimer - dt / 0.34);
     const r = 9;
     this.pos[0] = damp(this.pos[0], this.tPos[0], r, dt);
     this.pos[1] = damp(this.pos[1], this.tPos[1], r, dt);
@@ -62,6 +65,13 @@ class Peer {
     this.yaw = dampAngle(this.yaw, this.tYaw, r, dt);
     this.roll = damp(this.roll, this.tRoll, r, dt);
     this.edge = -this.roll / 0.92;
+    // 送られてくるのは姿勢だけなので、ストックワークは受信側で再現する
+    const es = Math.abs(this.edge) > 0.16 ? Math.sign(this.edge) : 0;
+    if (es !== 0 && es !== this._edgeSign && this.speed > 5 && this.poleTimer <= 0) {
+      this.poleSide = -es;
+      this.poleTimer = 1;
+    }
+    if (es !== 0) this._edgeSign = es;
     this.grounded = this.state !== 2;
     this.crouch = this.state === 2 ? 0.4 : 0.12;
     this.tumble = this.state === 1 ? this.tumble + dt * 6 : 0;

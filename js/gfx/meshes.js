@@ -123,6 +123,48 @@ export class MeshBuilder {
     return this;
   }
 
+  /**
+   * 任意の 2 点を結ぶ円柱。ストックのように軸が斜めのものに使う。
+   * 軸に直交する基底をその場で作るので、向きを気にしなくていい。
+   */
+  segment(x0, y0, z0, x1, y1, z1, r, seg = 6) {
+    let ax = x1 - x0, ay = y1 - y0, az = z1 - z0;
+    const len = Math.hypot(ax, ay, az);
+    if (len < 1e-6) return this;
+    ax /= len; ay /= len; az /= len;
+    // 軸と平行になりにくい方を選んで外積を取る
+    const hx = Math.abs(ay) < 0.9 ? 0 : 1, hy = Math.abs(ay) < 0.9 ? 1 : 0;
+    let ux = ay * 0 - az * hy, uy = az * hx - ax * 0, uz = ax * hy - ay * hx;
+    const ul = Math.hypot(ux, uy, uz) || 1;
+    ux /= ul; uy /= ul; uz /= ul;
+    const vx = ay * uz - az * uy, vy = az * ux - ax * uz, vz = ax * uy - ay * ux;
+
+    const ringA = [], ringB = [];
+    for (let i = 0; i <= seg; i++) {
+      const a = (i / seg) * TAU;
+      const c = Math.cos(a), sn = Math.sin(a);
+      const nx = ux * c + vx * sn, ny = uy * c + vy * sn, nz = uz * c + vz * sn;
+      ringA.push(this.vert(x0 + nx * r, y0 + ny * r, z0 + nz * r, nx, ny, nz));
+      ringB.push(this.vert(x1 + nx * r, y1 + ny * r, z1 + nz * r, nx, ny, nz));
+    }
+    for (let i = 0; i < seg; i++) this.quad(ringA[i], ringA[i + 1], ringB[i + 1], ringB[i]);
+    // 端の蓋
+    const ca = this.vert(x0, y0, z0, -ax, -ay, -az);
+    const cb = this.vert(x1, y1, z1, ax, ay, az);
+    for (let i = 0; i <= seg; i++) {
+      const a = (i / seg) * TAU;
+      const c = Math.cos(a), sn = Math.sin(a);
+      const nx = ux * c + vx * sn, ny = uy * c + vy * sn, nz = uz * c + vz * sn;
+      ringA[i] = this.vert(x0 + nx * r, y0 + ny * r, z0 + nz * r, -ax, -ay, -az);
+      ringB[i] = this.vert(x1 + nx * r, y1 + ny * r, z1 + nz * r, ax, ay, az);
+    }
+    for (let i = 0; i < seg; i++) {
+      this.tri(ca, ringA[i + 1], ringA[i]);
+      this.tri(cb, ringB[i], ringB[i + 1]);
+    }
+    return this;
+  }
+
   build() {
     return {
       vertices: new Float32Array(this.v),
@@ -168,89 +210,129 @@ export function buildTreeMesh(kind = 0) {
   return b.build();
 }
 
-/* --------------------------------------------------------- ライダー */
+/* --------------------------------------------------------- スキーヤー */
 
 export const BONE = {
-  BOARD: 0, PELVIS: 1, TORSO: 2, HEAD: 3,
-  ARM_L: 4, ARM_R: 5, LEG_F: 6, LEG_B: 7, BOOT_F: 8, BOOT_B: 9,
+  SKI_L: 0, SKI_R: 1, LEG_L: 2, LEG_R: 3,
+  PELVIS: 4, TORSO: 5, HEAD: 6, ARM_L: 7, ARM_R: 8,
 };
-export const BONE_COUNT = 10;
+export const BONE_COUNT = 9;
+
+/** 片方のスキー板（ブーツとビンディング込み）。ボーン原点はブーツの真下。 */
+function addSki(b, bone, tint) {
+  const dark = [0.12, 0.13, 0.16];
+  const base = [0.30, 0.33, 0.40];
+  b.setBone(bone).setAO(0);
+
+  // --- 板。テールからトップまで、幅がくびれる（サイドカット）---
+  const TAIL = -0.62, TIP = 1.02, T = 0.011;
+  const segs = 12;
+  for (let i = 0; i < segs; i++) {
+    const z0 = TAIL + (TIP - TAIL) * (i / segs);
+    const z1 = TAIL + (TIP - TAIL) * ((i + 1) / segs);
+    const zc = (z0 + z1) * 0.5;
+    // 幅: 先端と後端が広く、足元がくびれる
+    const t = (zc - TAIL) / (TIP - TAIL);
+    const w = 0.043 + 0.024 * Math.pow(Math.abs(t - 0.42) / 0.58, 1.8);
+    // トップの反り上がりと、テールのわずかな反り
+    const tipUp = zc > 0.70 ? Math.pow((zc - 0.70) / 0.32, 2.0) * 0.105 : 0;
+    const tailUp = zc < -0.46 ? Math.pow((-0.46 - zc) / 0.16, 2.0) * 0.022 : 0;
+    // 先端側に濃い差し色。真後ろから見ても板の長さが分かる。
+    if (zc > 0.50) b.color(0.16, 0.18, 0.24);
+    else if (zc < -0.34) b.color(0.16, 0.18, 0.24);
+    else b.color(tint[0], tint[1], tint[2]);
+    b.box(0, T + tipUp + tailUp, zc, w, T, (z1 - z0) * 0.5);
+    // 滑走面
+    b.color(base[0], base[1], base[2]);
+    b.box(0, tipUp + tailUp + T * 0.35, zc, w * 0.96, T * 0.45, (z1 - z0) * 0.5);
+  }
+
+  // --- ビンディング ---
+  b.color(dark[0], dark[1], dark[2]);
+  b.box(0, 0.035, 0.10, 0.042, 0.014, 0.10);
+  b.box(0, 0.035, -0.09, 0.042, 0.014, 0.075);
+
+  // --- ブーツ。前傾したシェル ---
+  b.color(0.17, 0.18, 0.23);
+  b.box(0, 0.085, 0.015, 0.052, 0.052, 0.115);        // シェル下部
+  b.box(0, 0.175, -0.005, 0.050, 0.055, 0.085);       // カフ
+  b.color(tint[0] * 0.7 + 0.15, tint[1] * 0.7 + 0.15, tint[2] * 0.7 + 0.15);
+  b.box(0, 0.185, 0.055, 0.046, 0.030, 0.030);        // バックル
+}
+
+/** ストック。手元から後ろ下がりに伸びる。 */
+function addPole(b, bone, side) {
+  const shaft = [0.62, 0.65, 0.72];
+  b.setBone(bone).setAO(0);
+  const hx = side * 0.008;
+  // グリップ
+  b.color(0.14, 0.15, 0.18);
+  b.segment(hx, -0.40, 0.03, hx, -0.52, 0.00, 0.017, 6);
+  // シャフト
+  b.color(shaft[0], shaft[1], shaft[2]);
+  b.segment(hx, -0.52, 0.00, hx + side * 0.035, -1.30, -0.30, 0.010, 5);
+  // バスケット
+  b.color(0.20, 0.21, 0.25);
+  b.segment(hx + side * 0.032, -1.22, -0.268, hx + side * 0.033, -1.24, -0.276, 0.040, 7);
+  // 先端
+  b.color(0.35, 0.36, 0.40);
+  b.segment(hx + side * 0.035, -1.30, -0.30, hx + side * 0.036, -1.35, -0.318, 0.005, 4);
+}
 
 /**
- * スノーボーダー。ボーン番号を頂点属性に持たせて 1 ドローで描く。
- * 服の色はシェーダ側で uTint と混ぜるので、ここでは陰影のベースだけ作る。
+ * スキーヤー。ボーン番号を頂点属性に持たせて 1 ドローで描く。
+ * 真っ白にしてある部分（ジャケット・板のトップ）はシェーダで uTint に置き換わる。
  */
 export function buildRiderMesh() {
   const b = new MeshBuilder();
-  const skin = [0.82, 0.62, 0.50];
   const dark = [0.13, 0.14, 0.17];
-  const pants = [0.22, 0.24, 0.30];
-  const boardTop = [0.14, 0.15, 0.19];
-  const boardBase = [0.55, 0.58, 0.66];
+  const pants = [0.20, 0.22, 0.28];
+  const white = [1, 1, 1];
 
-  // --- ボード（1.52m）。ノーズとテールを少し反らせる ---
-  b.setBone(BONE.BOARD);
-  const L = 0.76, W = 0.145, T = 0.018;
-  b.color(boardTop[0], boardTop[1], boardTop[2]);
-  const segs = 7;
-  for (let s = 0; s < segs; s++) {
-    const z0 = -L + (2 * L * s) / segs;
-    const z1 = -L + (2 * L * (s + 1)) / segs;
-    const zc = (z0 + z1) * 0.5;
-    const tt = Math.abs(zc / L);
-    const rise = tt * tt * tt * 0.075;                 // ノーズ/テールの反り
-    const w = W * (1 - 0.28 * tt * tt) * (1 + 0.10 * (1 - tt));  // サイドカット
-    b.box(0, rise + T, zc, w, T, (z1 - z0) * 0.5,
-      s === 3 ? [0.85, 0.30, 0.22] : undefined);
+  addSki(b, BONE.SKI_L, white);
+  addSki(b, BONE.SKI_R, white);
+
+  // --- 脚。ブーツの上から腰まで ---
+  b.color(pants[0], pants[1], pants[2]).setAO(0);
+  for (const bone of [BONE.LEG_L, BONE.LEG_R]) {
+    b.setBone(bone);
+    b.box(0, 0.13, 0, 0.058, 0.15, 0.074);            // すね
+    b.box(0, 0.38, 0.005, 0.072, 0.15, 0.090);        // 腿
   }
-  // バインディング
-  b.color(dark[0], dark[1], dark[2]);
-  b.box(0, 0.055, 0.20, 0.11, 0.030, 0.10);
-  b.box(0, 0.055, -0.20, 0.11, 0.030, 0.10);
-  // 滑走面（下から見たとき）
-  b.color(boardBase[0], boardBase[1], boardBase[2]);
-  b.box(0, T * 0.4, 0, W * 0.92, T * 0.5, L * 0.94);
 
-  // --- ブーツ ---
-  b.color(dark[0], dark[1], dark[2]);
-  b.setBone(BONE.BOOT_F); b.box(0, 0.10, 0, 0.076, 0.10, 0.115);
-  b.setBone(BONE.BOOT_B); b.box(0, 0.10, 0, 0.076, 0.10, 0.115);
-
-  // --- 脚。太もも側をわずかに太くして人らしく見せる ---
-  b.color(pants[0], pants[1], pants[2]);
-  b.setBone(BONE.LEG_F);
-  b.box(0, 0.16, 0, 0.079, 0.18, 0.093);
-  b.box(0, 0.42, 0, 0.093, 0.14, 0.102);
-  b.setBone(BONE.LEG_B);
-  b.box(0, 0.16, 0, 0.079, 0.18, 0.093);
-  b.box(0, 0.42, 0, 0.093, 0.14, 0.102);
-
-  // --- 腰と胴（uTint が乗る部分は白めにしておく）---
+  // --- 腰 ---
   b.setBone(BONE.PELVIS);
   b.color(pants[0] * 1.15, pants[1] * 1.15, pants[2] * 1.15);
-  b.box(0, 0.07, 0, 0.145, 0.10, 0.125);
+  b.box(0, 0.07, 0, 0.135, 0.10, 0.115);
 
+  // --- 胴。前を向いている ---
   b.setBone(BONE.TORSO);
-  b.color(1, 1, 1);                                   // ジャケット = uTint
-  b.box(0, 0.26, 0, 0.152, 0.25, 0.118);
-  b.box(0, 0.47, 0, 0.175, 0.055, 0.125);             // 肩
-  b.color(0.86, 0.87, 0.90);
-  b.box(0, 0.535, 0, 0.098, 0.045, 0.088);            // 襟
+  b.color(white[0], white[1], white[2]);              // ジャケット = uTint
+  b.box(0, 0.25, 0, 0.140, 0.24, 0.108);
+  b.box(0, 0.45, 0, 0.172, 0.055, 0.115);             // 肩
+  b.color(0.88, 0.89, 0.92);
+  b.box(0, 0.505, 0, 0.096, 0.042, 0.084);            // 襟
+  b.color(0.30, 0.32, 0.38);
+  b.box(0, 0.27, 0.106, 0.048, 0.16, 0.010);          // 前立て
 
-  // --- 頭（ヘルメット + ゴーグル）---
+  // --- 頭（ヘルメット + ゴーグル）。前向き ---
   b.setBone(BONE.HEAD);
   b.color(0.16, 0.17, 0.21);
-  b.cylinder(0, 0, 0, 0.108, 0.092, 0.175, 9, true, true);
-  b.color(0.35, 0.72, 0.85);                          // ゴーグル
-  b.box(0, 0.10, 0.092, 0.092, 0.038, 0.024);
+  b.cylinder(0, 0, 0, 0.106, 0.090, 0.170, 9, true, true);
+  b.color(0.32, 0.70, 0.86);                          // ゴーグル
+  b.box(0, 0.100, 0.092, 0.090, 0.038, 0.026);
+  b.color(0.10, 0.11, 0.14);
+  b.box(0, 0.100, -0.090, 0.070, 0.022, 0.020);       // ストラップ
 
-  // --- 腕 ---
-  b.color(1, 1, 1);
-  b.setBone(BONE.ARM_L); b.box(0, -0.19, 0, 0.058, 0.21, 0.063);
-  b.setBone(BONE.ARM_R); b.box(0, -0.19, 0, 0.058, 0.21, 0.063);
-  b.color(0.20, 0.21, 0.25);
-  b.setBone(BONE.ARM_L); b.box(0, -0.43, 0, 0.058, 0.05, 0.063);   // グローブ
-  b.setBone(BONE.ARM_R); b.box(0, -0.43, 0, 0.058, 0.05, 0.063);
+  // --- 腕 + ストック ---
+  for (const [bone, side] of [[BONE.ARM_L, -1], [BONE.ARM_R, 1]]) {
+    b.setBone(bone);
+    b.color(white[0], white[1], white[2]);
+    b.box(0, -0.17, 0, 0.053, 0.19, 0.058);           // 上腕〜前腕
+    b.color(0.19, 0.20, 0.24);
+    b.box(0, -0.40, 0.015, 0.050, 0.048, 0.058);      // グローブ
+    addPole(b, bone, side);
+  }
 
   return b.build();
 }

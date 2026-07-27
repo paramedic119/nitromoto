@@ -162,6 +162,7 @@ export class Audio {
 
   land(impact, clean, rider) { if (this.ready) this.sfx.land(impact, clean, rider); }
   pop(power) { if (this.ready) this.sfx.pop(power); }
+  polePlant(side, speed) { if (this.ready) this.sfx.polePlant(side, speed); }
   treeHit(glancing, speed) { if (this.ready) this.sfx.treeHit(glancing, speed); }
   wipeout() { if (this.ready) { this.sfx.wipeout(); this.music.duck(); } }
 }
